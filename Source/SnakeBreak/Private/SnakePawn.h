@@ -3,7 +3,6 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
 #include "InputActionValue.h"
-#include "DrawDebugHelpers.h"
 #include "SnakePawn.generated.h"
 
 class UCameraComponent;
@@ -39,11 +38,11 @@ protected:
 	virtual void Tick(float DeltaTime) override;
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Grid")
 	float CellSize = 100.f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid")
-	FIntPoint GridDimensions = FIntPoint(10, 10);
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "5", ClampMax = "100"))
+	FIntPoint GridDimensions = FIntPoint(20, 20);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement", meta = (ClampMin = "0.01", ClampMax = "1.0"))
 	float MoveStepTime = 0.2f; // Time it takes to move from one grid cell to the next when using grid movement.
@@ -61,6 +60,8 @@ private:
 
 	float MoveInterpolationProgress = 0.f;
 	bool bIsMovingToTarget = false;
+	bool bIsDead = false;
+	FTimerHandle ResetTimerHandle;
 
 	FVector GetVectorFromDirection(ESnakeDirection Direction) const;
 	FIntPoint DirectionToGridOffset(ESnakeDirection Direction) const;
@@ -78,6 +79,11 @@ private:
 	void TickFreeMovement(float DeltaTime);
 	bool IsValidTurn(ESnakeDirection NewDirection) const;
 	void DrawDebugInfo();
+	FIntPoint GetClampedStartGridPosition() const;
+
+	bool WouldHitWall(const FIntPoint& NextCell) const;
+	void HandleSnakeDeath();
+	void ResetSnake();
 
 	// VisibleAnywhere = can be seen in the editor, but not modified; BlueprintReadOnly = can be read in Blueprints, but not modified; Category = how it is grouped in the editor
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess = "true"))
@@ -112,6 +118,9 @@ private:
 	// Could use a movement mode enum instead
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement", meta = (AllowPrivateAccess = "true"))
 	bool bUseGridMovement = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (AllowPrivateAccess = "true"))
+	FIntPoint StartGridPosition = FIntPoint(10, 10);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (AllowPrivateAccess = "true"))
 	FVector GridOrigin = FVector::ZeroVector;

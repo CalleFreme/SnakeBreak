@@ -5,6 +5,7 @@
 #include "EnhancedInputSubsystems.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Components/SphereComponent.h"
+#include "DrawDebugHelpers.h"
 
 // Sets default values
 ASnakePawn::ASnakePawn()
@@ -31,7 +32,7 @@ ASnakePawn::ASnakePawn()
 
 	SpringArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("SpringArm"));
 	SpringArm->SetupAttachment(RootComponent);
-	SpringArm->TargetArmLength = 600.f;
+	SpringArm->TargetArmLength = 800.f;
 	SpringArm->bUsePawnControlRotation = false; // fixed camera, not controller-driven
 	SpringArm->SetUsingAbsoluteRotation(true);  // fixed world rotation, not relative to pawn rotation
 	SpringArm->SetRelativeRotation(FRotator(-60.f, 0.f, 0.f));
@@ -53,10 +54,14 @@ void ASnakePawn::BeginPlay()
 
 	if (bUseGridMovement)
 	{
-		SetActorLocation(GridToWorldLocation(CurrentGridPosition));
-		StepStartWorldLocation = GetActorLocation();
-		StepTargetWorldLocation = GetActorLocation();
+		CurrentGridPosition = GetClampedStartGridPosition();
 		PendingNextGridPosition = CurrentGridPosition;
+		
+		const FVector StartLocation = GridToWorldLocation(CurrentGridPosition);
+		SetActorLocation(StartLocation);
+
+		StepStartWorldLocation = StartLocation;
+		StepTargetWorldLocation = StartLocation;
 		MoveInterpolationProgress = 0.f;
 		bIsMovingToTarget = false;
 	}
@@ -89,6 +94,10 @@ void ASnakePawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	if (bIsDead)
+	{
+		return;
+	}
 
 	if (bUseGridMovement)
 	{
@@ -199,6 +208,12 @@ void ASnakePawn::TickGridMovement(float DeltaTime)
 		const FIntPoint GridOffset = DirectionToGridOffset(CurrentDirection);
 		PendingNextGridPosition = CurrentGridPosition + GridOffset;
 
+		if (WouldHitWall(PendingNextGridPosition))
+		{
+			HandleSnakeDeath();
+			return;
+		}
+
 		StepStartWorldLocation = GridToWorldLocation(CurrentGridPosition);
 		StepTargetWorldLocation = GridToWorldLocation(PendingNextGridPosition);
 		MoveInterpolationProgress = 0.f; // Since we're just starting to move towards the new target, we reset the interpolation progress to 0
@@ -209,14 +224,14 @@ void ASnakePawn::TickGridMovement(float DeltaTime)
 	const float Alpha = FMath::Clamp(MoveInterpolationProgress, 0.f, 1.f);
 
 	// Use Lerp for constant speed across the cell
-	FVector NewLocation = FMath::Lerp(StepStartWorldLocation, StepTargetWorldLocation, Alpha);
-	SetActorLocation(NewLocation);
+	const FVector NewLocation = FMath::Lerp(StepStartWorldLocation, StepTargetWorldLocation, Alpha);
+	SetActorLocation(NewLocation, false);
 
 	if (Alpha >= 1.f)
 	{
 		// We've reached the target grid location
 		CurrentGridPosition = PendingNextGridPosition;
-		SetActorLocation(StepTargetWorldLocation); // Ensure we snap exactly to the target location
+		SetActorLocation(StepTargetWorldLocation, false); // Ensure we snap exactly to the target location
 		bIsMovingToTarget = false; // We're now at the target, so we can start the process again on the next tick
 	}
 }
@@ -319,4 +334,53 @@ FIntPoint ASnakePawn::DirectionToGridOffset(ESnakeDirection Direction) const
 FVector ASnakePawn::GridToWorldLocation(const FIntPoint& GridPosition) const
 {
 	return GridOrigin + FVector(GridPosition.X * CellSize, GridPosition.Y * CellSize, 0.f);
+}
+
+bool ASnakePawn::WouldHitWall(const FIntPoint& NextCell) const
+{
+	// This assumes our border cells are walls.
+	return NextCell.X <= 0 || NextCell.X >= GridDimensions.X - 1
+		|| NextCell.Y <= 0 || NextCell.Y >= GridDimensions.Y - 1;
+}
+
+void ASnakePawn::HandleSnakeDeath()
+{
+	if (bIsDead)
+	{
+		return;
+	}
+
+	bIsDead = true;
+	UE_LOG(LogTemp, Warning, TEXT("Snake has hit a wall and died!"));
+
+	// Pauses for a moment, then reset snake to starting position and direction for now:
+	// We can do a delay and call the ResetSnake method like this:
+	GetWorldTimerManager().SetTimer(ResetTimerHandle, this, &ASnakePawn::ResetSnake, 1.f, false); // 1 second delay, not looping
+}
+
+void ASnakePawn::ResetSnake()
+{
+	const FIntPoint SpawnCell = GetClampedStartGridPosition();
+	CurrentGridPosition = SpawnCell;
+	PendingNextGridPosition = SpawnCell;
+
+	CurrentDirection = ESnakeDirection::Right;
+	RequestedDirection = ESnakeDirection::Right;
+	UpdateDirection(CurrentDirection);
+	
+	const FVector ResetLocation = GridToWorldLocation(CurrentGridPosition);
+	SetActorLocation(ResetLocation);
+	StepStartWorldLocation = ResetLocation;
+	StepTargetWorldLocation = ResetLocation;
+	MoveInterpolationProgress = 0.f;
+	bIsMovingToTarget = false;
+	bIsDead = false;
+}
+
+FIntPoint ASnakePawn::GetClampedStartGridPosition() const
+{
+	return FIntPoint(
+		FMath::Clamp(StartGridPosition.X, 1, GridDimensions.X - 2),
+		FMath::Clamp(StartGridPosition.Y, 1, GridDimensions.Y - 2)
+	);
 }
