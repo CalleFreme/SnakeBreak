@@ -15,13 +15,6 @@ class USphereComponent;
 
 // We can create an enum type to let the Snake keep track of its requested movement direction, which will be useful for implementing proper Snake movement in the future. For now, we can just use the forward and turn input for free movement, but in the future we can switch to a grid-based movement system where the snake moves in discrete steps in one of four directions (up, down, left, right) and turns at right angles. This will require a different input setup (e.g. four separate input actions for each direction, or using a 2D vector input and converting it to discrete directions in code), as well as a different movement implementation that moves the snake in a grid-based manner and handles turning at right angles instead of free rotation. Where do you put the enum code? You can put it either in the header file (SnakePawn.h) or in the source file (SnakePawn.cpp), depending on how you want to use it. If you want to use the enum in other classes or Blueprints, it's better to put it in the header file so it's more accessible. If it's only used internally within the SnakePawn class, you can put it in the source file to keep it more encapsulated. For this simple game, we can just put it in the header file for now, since we might want to use it in Blueprints later when we implement the proper Snake movement.
 
-struct GridPosition
-{
-	int32 X;
-	int32 Y;
-	GridPosition(int32 InX, int32 InY) : X(InX), Y(InY) {}
-};
-
 UENUM(BlueprintType)
 enum class ESnakeDirection : uint8
 {
@@ -46,14 +39,32 @@ protected:
 	virtual void Tick(float DeltaTime) override;
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid")
+	float CellSize = 100.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid")
+	FIntPoint GridDimensions = FIntPoint(10, 10);
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement", meta = (ClampMin = "0.01", ClampMax = "1.0"))
+	float MoveStepTime = 0.2f; // Time it takes to move from one grid cell to the next when using grid movement.
+
 private:
 	ESnakeDirection CurrentDirection = ESnakeDirection::Right;
 	ESnakeDirection RequestedDirection = ESnakeDirection::Right;
 	// We keep track of current grid position.
-	GridPosition CurrentGridPosition = GridPosition(0, 0);
+	FIntPoint CurrentGridPosition = FIntPoint(0, 0);
+	FIntPoint PendingNextGridPosition = FIntPoint(0, 0);
 
-	// Keep track of target world position for smooth movement:
-	FVector TargetWorldPosition = FVector::ZeroVector;
+	// Keep track of last and target world position for smooth movement:
+	FVector StepStartWorldLocation = FVector::ZeroVector;
+	FVector StepTargetWorldLocation = FVector::ZeroVector;
+
+	float MoveInterpolationProgress = 0.f;
+	bool bIsMovingToTarget = false;
+
+	FVector GetVectorFromDirection(ESnakeDirection Direction) const;
+	FIntPoint DirectionToGridOffset(ESnakeDirection Direction) const;
+	FVector GridToWorldLocation(const FIntPoint& GridPosition) const;
 
 	// Input callback functions
 	void Input_TryTurnUp(const FInputActionValue& Value);
@@ -61,11 +72,12 @@ private:
 	void Input_TryTurnLeft(const FInputActionValue& Value);
 	void Input_TryTurnRight(const FInputActionValue& Value);
 
+	void HandleDirectionChange();
 	void UpdateDirection(ESnakeDirection NewDirection);
-	void MoveForward(float DeltaTime);
 	void TickGridMovement(float DeltaTime);
 	void TickFreeMovement(float DeltaTime);
 	bool IsValidTurn(ESnakeDirection NewDirection) const;
+	void DrawDebugInfo();
 
 	// VisibleAnywhere = can be seen in the editor, but not modified; BlueprintReadOnly = can be read in Blueprints, but not modified; Category = how it is grouped in the editor
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess = "true"))
@@ -101,8 +113,11 @@ private:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement", meta = (AllowPrivateAccess = "true"))
 	bool bUseGridMovement = false;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (AllowPrivateAccess = "true"))
+	FVector GridOrigin = FVector::ZeroVector;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement", meta = (AllowPrivateAccess = "true"))
-	float MoveSpeed = 600.f;
+	float MoveSpeed = 100.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement", meta = (AllowPrivateAccess = "true"))
 	float TurnSpeed = 90.f;

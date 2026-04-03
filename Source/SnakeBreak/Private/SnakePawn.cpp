@@ -5,13 +5,13 @@
 #include "EnhancedInputSubsystems.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Components/SphereComponent.h"
-#include "DrawDebugHelpers.h"
 
 // Sets default values
 ASnakePawn::ASnakePawn()
 {
  	// Set this pawn to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.TickGroup = TG_PostPhysics; // Ensures this actor tick AFTER all physics and movement has been resolved. This is important for our snake pawn, because we want to update the snake's position and direction based on player input after all movement and collision has been processed for the frame, so that the snake's movement feels responsive and accurate to the player's input without being affected by physics or collision issues.
 
 	// Automatically possess this pawn with the first player controller
 	AutoPossessPlayer = EAutoReceiveInput::Player0;
@@ -34,7 +34,7 @@ ASnakePawn::ASnakePawn()
 	SpringArm->TargetArmLength = 600.f;
 	SpringArm->bUsePawnControlRotation = false; // fixed camera, not controller-driven
 	SpringArm->SetUsingAbsoluteRotation(true);  // fixed world rotation, not relative to pawn rotation
-	SpringArm->SetRelativeRotation(FRotator(-45.f, 0.f, 0.f));
+	SpringArm->SetRelativeRotation(FRotator(-60.f, 0.f, 0.f));
 	SpringArm->bDoCollisionTest = false;
 
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
@@ -48,19 +48,29 @@ void ASnakePawn::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// Bump up the Z slightly to avoid initial overlap/floor stuck
-	FVector StartLocation = GetActorLocation();
-	StartLocation.Z += 15.f;
-	SetActorLocation(StartLocation);
-
 	RequestedDirection = CurrentDirection;
-	UpdateDirection(CurrentDirection);
+	UpdateDirection(CurrentDirection);	
+
+	if (bUseGridMovement)
+	{
+		SetActorLocation(GridToWorldLocation(CurrentGridPosition));
+		StepStartWorldLocation = GetActorLocation();
+		StepTargetWorldLocation = GetActorLocation();
+		PendingNextGridPosition = CurrentGridPosition;
+		MoveInterpolationProgress = 0.f;
+		bIsMovingToTarget = false;
+	}
+	else
+	{
+		FVector StartLocation = GetActorLocation();
+		StartLocation.Z += 15.f;
+		SetActorLocation(StartLocation);
+	}
 
 	// Why Cast? Because GetController() returns an AController*, but we need to check if it's an APlayerController* in order to access the local player and enhanced input subsystem. We also check if the cast is successful, because in some cases (e.g. if this pawn is possessed by an AI controller), there might not be a player controller, and we don't want to crash if that's the case.
 	if (APlayerController* PC = Cast<APlayerController>(GetController()))
 	{
-		// Why Cast? Because GetLocalPlayer() is a function of ULocalPlayer, which is a subclass of UPlayer, which is what GetController()->GetLocalPlayer() returns. So we need to cast to ULocalPlayer to access that function. We also check if the cast is successful, because in some cases (e.g. if this pawn is possessed by an AI controller), there might not be a local player associated with the controller, and we don't want to crash if that's the case.
-		if (ULocalPlayer* LocalPlayer = Cast<ULocalPlayer>(PC->GetLocalPlayer()))
+		if (ULocalPlayer* LocalPlayer = PC->GetLocalPlayer())
 		{
 			// Better name for this variable might be "EnhancedInputSubsystem" or "PlayerEnhancedInputSubsystem", but "Subsystem" is fine for this small scope. We also check if the subsystem is valid, because if we're using the Enhanced Input system, it should be there, but we want to avoid crashing if it's not for some reason (e.g. if the player controller or local player is set up in a way that doesn't include the subsystem).
 			if (UEnhancedInputLocalPlayerSubsystem* Subsystem = LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>())
@@ -79,49 +89,19 @@ void ASnakePawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	if (bShowDebugCollision && CollisionSphere)
-	{
-		DrawDebugSphere(
-			GetWorld(),
-			CollisionSphere->GetComponentLocation(),
-			CollisionSphere->GetScaledSphereRadius(),
-			16,
-			FColor::Green,
-			false,
-			-1.f, // Duration <0 means for one frame
-			0,
-			2.0f // Line thickness
-		);
-	}
-
-	// Draw pawn's forward vector arrow (Blue)
-	FVector ForwardStart = GetActorLocation();
-	FVector ForwardEnd = ForwardStart + GetActorForwardVector() * 100.f; // 100 units in front
-	DrawDebugDirectionalArrow(GetWorld(), ForwardStart, ForwardEnd, 50.f, FColor::Blue, false, -1.f, 0, 3.0f);
-
-	// Draw pawn's right vector arrow (Red)
-	FVector RightStart = GetActorLocation();
-	FVector RightEnd = RightStart + GetActorRightVector() * 100.f; // 100 units to the right
-	DrawDebugDirectionalArrow(GetWorld(), RightStart, RightEnd, 50.f, FColor::Red, false, -1.f, 0, 3.0f);
-
-	if (CurrentDirection != RequestedDirection)
-	{
-		if (IsValidTurn(RequestedDirection))
-		{
-			CurrentDirection = RequestedDirection;
-			UpdateDirection(RequestedDirection);
-			UE_LOG(LogTemp, Warning, TEXT("Direction changed to: %s"), *UEnum::GetValueAsString(CurrentDirection));
-		}
-	}
 
 	if (bUseGridMovement)
 	{
+		// Interpolate towards the target
 		TickGridMovement(DeltaTime);
 	}
 	else
 	{
+		HandleDirectionChange();
 		TickFreeMovement(DeltaTime);
 	}
+
+	DrawDebugInfo();
 }
 
 // Called to bind functionality to input
@@ -132,7 +112,7 @@ void ASnakePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent
 	// We check:
 	// 1. That the PlayerInputComponent is a UEnhancedInputComponent, which it should be if we're using the Enhanced Input system; and
 	// 2. That the MoveAction and TurnAction are set, to avoid binding to null actions
-	if (UEnhancedInputComponent* EnhancedInputComponent = CastChecked<UEnhancedInputComponent>(PlayerInputComponent))
+	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
 		if (TurnUpAction)
 		{
@@ -192,30 +172,61 @@ void ASnakePawn::Input_TryTurnRight(const FInputActionValue& Value)
 	}
 }
 
-void ASnakePawn::MoveForward(float DeltaTime)
+FVector ASnakePawn::GetVectorFromDirection(ESnakeDirection Direction) const
 {
-	// Is this going to work? 
-	FVector MovementVector = FVector::ZeroVector;
-
-	switch (CurrentDirection)
+	switch (Direction)
 	{
-	case ESnakeDirection::Up:     MovementVector = FVector::ForwardVector;  break;   // +X
-	case ESnakeDirection::Down:   MovementVector = -FVector::ForwardVector; break;   // -X
-	case ESnakeDirection::Left:   MovementVector = -FVector::RightVector;   break;   // -Y
-	case ESnakeDirection::Right:  MovementVector = FVector::RightVector;    break;   // +Y
+	case ESnakeDirection::Up:     return FVector::ForwardVector;  // +X
+	case ESnakeDirection::Down:   return -FVector::ForwardVector; // -X
+	case ESnakeDirection::Left:   return -FVector::RightVector;   // -Y
+	case ESnakeDirection::Right:  return FVector::RightVector;    // +Y
+	default:                    return FVector::ZeroVector;     // Should never happen, but we return zero just in case
 	}
-	FVector DesiredOffset = MovementVector * MoveSpeed * DeltaTime;
-	AddActorWorldOffset(DesiredOffset, true);
 }
 
 void ASnakePawn::TickGridMovement(float DeltaTime)
 {
-	return;
+	if (MoveStepTime <= 0.f)
+	{
+		return;
+	}
+
+	if (!bIsMovingToTarget)
+	{
+		// If at target, check for direction change and update target location
+		HandleDirectionChange();
+
+		const FIntPoint GridOffset = DirectionToGridOffset(CurrentDirection);
+		PendingNextGridPosition = CurrentGridPosition + GridOffset;
+
+		StepStartWorldLocation = GridToWorldLocation(CurrentGridPosition);
+		StepTargetWorldLocation = GridToWorldLocation(PendingNextGridPosition);
+		MoveInterpolationProgress = 0.f; // Since we're just starting to move towards the new target, we reset the interpolation progress to 0
+		bIsMovingToTarget = true;
+	}
+
+	MoveInterpolationProgress += DeltaTime / MoveStepTime;
+	const float Alpha = FMath::Clamp(MoveInterpolationProgress, 0.f, 1.f);
+
+	// Use Lerp for constant speed across the cell
+	FVector NewLocation = FMath::Lerp(StepStartWorldLocation, StepTargetWorldLocation, Alpha);
+	SetActorLocation(NewLocation);
+
+	if (Alpha >= 1.f)
+	{
+		// We've reached the target grid location
+		CurrentGridPosition = PendingNextGridPosition;
+		SetActorLocation(StepTargetWorldLocation); // Ensure we snap exactly to the target location
+		bIsMovingToTarget = false; // We're now at the target, so we can start the process again on the next tick
+	}
 }
 
 void ASnakePawn::TickFreeMovement(float DeltaTime)
 {
-	MoveForward(DeltaTime);
+	// Is this going to work? 
+	FVector MovementVector = GetVectorFromDirection(CurrentDirection);
+	FVector DesiredOffset = MovementVector * MoveSpeed * DeltaTime;
+	AddActorWorldOffset(DesiredOffset, true);
 }
 
 bool ASnakePawn::IsValidTurn(ESnakeDirection NewDirection) const
@@ -253,4 +264,59 @@ void ASnakePawn::UpdateDirection(ESnakeDirection NewDirection)
 		case ESnakeDirection::Right:SetActorRotation(FRotator(0.f, 90.f, 0.f));
 			break;
 	}
+}
+
+void ASnakePawn::HandleDirectionChange()
+{
+	if (CurrentDirection != RequestedDirection && IsValidTurn(RequestedDirection))
+	{
+		CurrentDirection = RequestedDirection;
+		UpdateDirection(CurrentDirection);
+		UE_LOG(LogTemp, Warning, TEXT("Direction changed to: %s"), *UEnum::GetValueAsString(CurrentDirection));
+	}
+}
+
+void ASnakePawn::DrawDebugInfo()
+{
+	if (bShowDebugCollision && CollisionSphere)
+	{
+		DrawDebugSphere(
+			GetWorld(),
+			CollisionSphere->GetComponentLocation(),
+			CollisionSphere->GetScaledSphereRadius(),
+			16,
+			FColor::Green,
+			false,
+			-1.f, // Duration <0 means for one frame
+			0,
+			2.0f // Line thickness
+		);
+	}
+
+	// Draw pawn's forward vector arrow (Blue)
+	FVector ForwardStart = GetActorLocation();
+	FVector ForwardEnd = ForwardStart + GetActorForwardVector() * 100.f; // 100 units in front
+	DrawDebugDirectionalArrow(GetWorld(), ForwardStart, ForwardEnd, 50.f, FColor::Blue, false, -1.f, 0, 3.0f);
+
+	// Draw pawn's right vector arrow (Red)
+	FVector RightStart = GetActorLocation();
+	FVector RightEnd = RightStart + GetActorRightVector() * 100.f; // 100 units to the right
+	DrawDebugDirectionalArrow(GetWorld(), RightStart, RightEnd, 50.f, FColor::Red, false, -1.f, 0, 3.0f);
+}
+
+FIntPoint ASnakePawn::DirectionToGridOffset(ESnakeDirection Direction) const
+{
+	switch (Direction)
+	{
+	case ESnakeDirection::Up: return FIntPoint(1, 0);	// +X
+	case ESnakeDirection::Down: return FIntPoint(-1, 0);// -X
+	case ESnakeDirection::Left: return FIntPoint(0, -1);// -Y
+	case ESnakeDirection::Right: return FIntPoint(0, 1);// +Y
+	default: return FIntPoint(0, 0);
+	}
+}
+
+FVector ASnakePawn::GridToWorldLocation(const FIntPoint& GridPosition) const
+{
+	return GridOrigin + FVector(GridPosition.X * CellSize, GridPosition.Y * CellSize, 0.f);
 }
