@@ -1,6 +1,3 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
-
 #include "SnakePawn.h"
 #include "Camera/CameraComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -21,12 +18,13 @@ ASnakePawn::ASnakePawn()
 	// Alternatively, you would set up GameMode to spawn this pawn class and possess it, but for a simple game like this, AutoPossessPlayer is easier
 
 	CollisionSphere = CreateDefaultSubobject<USphereComponent>(TEXT("CollisionSphere"));
-	CollisionSphere->SetSphereRadius(CollisionSphereRadius);
 	RootComponent = CollisionSphere;
+	CollisionSphere->SetSphereRadius(CollisionSphereRadius);
 	CollisionSphere->SetCollisionProfileName(TEXT("Pawn")); // Set the collision profile to "Pawn", which is a predefined profile that allows it to collide with the world and other pawns, but not block the camera or other things. This is important for our snake pawn, because we want it to be able to collide with the ground and other objects, but we don't want it to block the camera or cause weird physics interactions with the box mesh.
 
 	BoxMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BoxMesh"));
 	BoxMesh->SetupAttachment(RootComponent);
+	BoxMesh->SetRelativeLocation(FVector::ZeroVector); // Center the mesh on the root component (collision sphere)
 	// We don't want the mesh to collide with the ground or other objects, because we're going to use a separate collision sphere for that, and we want the mesh to just be a visual representation of the snake's head without affecting physics or collisions. So we set it to NoCollision, which means it won't generate any collision events or block anything. We also set SimulatePhysics to false, because we don't want the mesh to be affected by physics forces or gravity, since we're going to move it manually in the Tick function based on player input:
 	BoxMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	BoxMesh->SetSimulatePhysics(false);
@@ -34,12 +32,15 @@ ASnakePawn::ASnakePawn()
 	SpringArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("SpringArm"));
 	SpringArm->SetupAttachment(RootComponent);
 	SpringArm->TargetArmLength = 600.f;
+	SpringArm->bUsePawnControlRotation = false; // fixed camera, not controller-driven
+	SpringArm->SetUsingAbsoluteRotation(true);  // fixed world rotation, not relative to pawn rotation
 	SpringArm->SetRelativeRotation(FRotator(-45.f, 0.f, 0.f));
-	// SpringArm->bUsePawnControlRotation = true; // This would make the camera rotate with the controller/pawn, but we want a fixed camera angle for this game
-	SpringArm->bDoCollisionTest = false; // Disable collision testing so the camera doesn't get pushed in when it hits something
+	SpringArm->bDoCollisionTest = false;
 
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
-	Camera->SetupAttachment(SpringArm, USpringArmComponent::SocketName); // Attach the camera to the end of the spring arm, SocketName is just a predefined socket at the end of the spring arm
+	Camera->SetupAttachment(SpringArm, USpringArmComponent::SocketName);
+
+	bUseControllerRotationYaw = false;
 }
 
 // Called when the game starts or when spawned
@@ -49,8 +50,11 @@ void ASnakePawn::BeginPlay()
 
 	// Bump up the Z slightly to avoid initial overlap/floor stuck
 	FVector StartLocation = GetActorLocation();
-	StartLocation.Z += 30.f;
+	StartLocation.Z += 15.f;
 	SetActorLocation(StartLocation);
+
+	RequestedDirection = CurrentDirection;
+	UpdateDirection(CurrentDirection);
 
 	// Why Cast? Because GetController() returns an AController*, but we need to check if it's an APlayerController* in order to access the local player and enhanced input subsystem. We also check if the cast is successful, because in some cases (e.g. if this pawn is possessed by an AI controller), there might not be a player controller, and we don't want to crash if that's the case.
 	if (APlayerController* PC = Cast<APlayerController>(GetController()))
@@ -89,28 +93,35 @@ void ASnakePawn::Tick(float DeltaTime)
 			2.0f // Line thickness
 		);
 	}
-	// Apply Forward Movement
-	if (!FMath::IsNearlyZero(CurrentForwardInput))
+
+	// Draw pawn's forward vector arrow (Blue)
+	FVector ForwardStart = GetActorLocation();
+	FVector ForwardEnd = ForwardStart + GetActorForwardVector() * 100.f; // 100 units in front
+	DrawDebugDirectionalArrow(GetWorld(), ForwardStart, ForwardEnd, 50.f, FColor::Blue, false, -1.f, 0, 3.0f);
+
+	// Draw pawn's right vector arrow (Red)
+	FVector RightStart = GetActorLocation();
+	FVector RightEnd = RightStart + GetActorRightVector() * 100.f; // 100 units to the right
+	DrawDebugDirectionalArrow(GetWorld(), RightStart, RightEnd, 50.f, FColor::Red, false, -1.f, 0, 3.0f);
+
+	if (CurrentDirection != RequestedDirection)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Move: %.2f"), CurrentForwardInput);
-		FVector DesiredOffset = GetActorForwardVector() * CurrentForwardInput * MoveSpeed * DeltaTime;
-		AddActorWorldOffset(DesiredOffset, true);
+		if (IsValidTurn(RequestedDirection))
+		{
+			CurrentDirection = RequestedDirection;
+			UpdateDirection(RequestedDirection);
+			UE_LOG(LogTemp, Warning, TEXT("Direction changed to: %s"), *UEnum::GetValueAsString(CurrentDirection));
+		}
 	}
 
-	// Apply Rotation
-	if (!FMath::IsNearlyZero(CurrentTurnInput))
+	if (bUseGridMovement)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Turn: %.2f"), CurrentTurnInput);
-		// Unreal uses left-handed rotation, so positive yaw rotates to the right, and negative yaw rotates to the left. This is opposite of what we might expect if we think in terms of a standard Cartesian coordinate system, but it's just something to keep in mind when setting up input bindings and interpreting input values.
-		FRotator DesiredRotation = FRotator(0.f, CurrentTurnInput * TurnSpeed * DeltaTime, 0.f); // Rotate around the Z axis (yaw) based on the turn input, turn speed, and delta time. We multiply by delta time to make the rotation frame rate independent, so it rotates at the same speed regardless of frame rate.
-		AddActorWorldRotation(DesiredRotation);
+		TickGridMovement(DeltaTime);
 	}
-
-	// IMPORTANT: Reset input if your Input Action is set to "Pressed" 
-	// or keep it if using "Triggered" with a continuous axis.
-	// For BoxRover, usually we reset or let the Input Action Zero it out.
-	//CurrentForwardInput = 0.f;
-	//CurrentTurnInput = 0.f;
+	else
+	{
+		TickFreeMovement(DeltaTime);
+	}
 }
 
 // Called to bind functionality to input
@@ -123,29 +134,123 @@ void ASnakePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent
 	// 2. That the MoveAction and TurnAction are set, to avoid binding to null actions
 	if (UEnhancedInputComponent* EnhancedInputComponent = CastChecked<UEnhancedInputComponent>(PlayerInputComponent))
 	{
-		if (MoveAction)
+		if (TurnUpAction)
 		{
-			EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ASnakePawn::Input_Move);
-			EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Completed, this, &ASnakePawn::Input_Move); // We bind to both Triggered and Completed so that we can start moving when the input is triggered, and stop moving when the input is completed (e.g. when the player releases the key)
+			EnhancedInputComponent->BindAction(TurnUpAction, ETriggerEvent::Triggered, this, &ASnakePawn::Input_TryTurnUp);
 		}
-		if (TurnAction)
+		if (TurnDownAction)
 		{
-			EnhancedInputComponent->BindAction(TurnAction, ETriggerEvent::Triggered, this, &ASnakePawn::Input_Turn);
-			EnhancedInputComponent->BindAction(TurnAction, ETriggerEvent::Completed, this, &ASnakePawn::Input_Turn);
+			EnhancedInputComponent->BindAction(TurnDownAction, ETriggerEvent::Triggered, this, &ASnakePawn::Input_TryTurnDown);
+		}
+
+		if (TurnLeftAction)
+		{
+			EnhancedInputComponent->BindAction(TurnLeftAction, ETriggerEvent::Triggered, this, &ASnakePawn::Input_TryTurnLeft);
+		}
+		if (TurnRightAction)
+		{
+			EnhancedInputComponent->BindAction(TurnRightAction, ETriggerEvent::Triggered, this, &ASnakePawn::Input_TryTurnRight);
 		}
 	}
 
 }
 
-void ASnakePawn::Input_Move(const FInputActionValue& Value)
+void ASnakePawn::Input_TryTurnUp(const FInputActionValue& Value)
 {
-	// We expect MoveAction to be a 1D axis (e.g. bound to W/S or Up/Down keys, or a gamepad trigger), so we get the Axis1D value from the input
-	CurrentForwardInput = Value.Get<FInputActionValue::Axis1D>();
+	bool bPressed = Value.Get<bool>();
+	if (bPressed)
+	{
+
+		RequestedDirection = ESnakeDirection::Up;
+	}
 }
 
-void ASnakePawn::Input_Turn(const FInputActionValue& Value)
+void ASnakePawn::Input_TryTurnDown(const FInputActionValue& Value)
 {
-	// We expect TurnAction to be a 1D axis (e.g. bound to A/D or Left/Right keys, or a gamepad stick), so we get the Axis1D value from the input
-	CurrentTurnInput = Value.Get<FInputActionValue::Axis1D>(); // Could also take as float directly since we know it's an Axis1D, but using FInputActionValue::Axis1D is more explicit and allows for easier changes later if we want to use a different input type
+	bool bPressed = Value.Get<bool>();
+	if (bPressed)
+	{
+		RequestedDirection = ESnakeDirection::Down;
+	}
 }
 
+void ASnakePawn::Input_TryTurnLeft(const FInputActionValue& Value)
+{
+	bool bPressed = Value.Get<bool>();
+	if (bPressed)
+	{
+		RequestedDirection = ESnakeDirection::Left;
+	}
+}
+
+void ASnakePawn::Input_TryTurnRight(const FInputActionValue& Value)
+{
+	bool bPressed = Value.Get<bool>();
+	if (bPressed)
+	{
+		RequestedDirection = ESnakeDirection::Right;
+	}
+}
+
+void ASnakePawn::MoveForward(float DeltaTime)
+{
+	// Is this going to work? 
+	FVector MovementVector = FVector::ZeroVector;
+
+	switch (CurrentDirection)
+	{
+	case ESnakeDirection::Up:     MovementVector = FVector::ForwardVector;  break;   // +X
+	case ESnakeDirection::Down:   MovementVector = -FVector::ForwardVector; break;   // -X
+	case ESnakeDirection::Left:   MovementVector = -FVector::RightVector;   break;   // -Y
+	case ESnakeDirection::Right:  MovementVector = FVector::RightVector;    break;   // +Y
+	}
+	FVector DesiredOffset = MovementVector * MoveSpeed * DeltaTime;
+	AddActorWorldOffset(DesiredOffset, true);
+}
+
+void ASnakePawn::TickGridMovement(float DeltaTime)
+{
+	return;
+}
+
+void ASnakePawn::TickFreeMovement(float DeltaTime)
+{
+	MoveForward(DeltaTime);
+}
+
+bool ASnakePawn::IsValidTurn(ESnakeDirection NewDirection) const
+{
+	// A turn is valid if it's not the same as the current direction, and it's not directly opposite to the current direction (e.g. if we're moving up, we can't turn down)
+	if (NewDirection == CurrentDirection)
+	{
+		return false;
+	}
+	switch (CurrentDirection)
+	{
+	case ESnakeDirection::Up:
+		return NewDirection != ESnakeDirection::Down;
+	case ESnakeDirection::Down:
+		return NewDirection != ESnakeDirection::Up;
+	case ESnakeDirection::Left:
+		return NewDirection != ESnakeDirection::Right;
+	case ESnakeDirection::Right:
+		return NewDirection != ESnakeDirection::Left;
+	default:
+		return false; // Should never happen, but we return false just in case
+	}
+}
+
+void ASnakePawn::UpdateDirection(ESnakeDirection NewDirection)
+{
+	switch (NewDirection)
+	{
+		case ESnakeDirection::Up:	SetActorRotation(FRotator(0.f, 0.f, 0.f));
+			break;
+		case ESnakeDirection::Down:	SetActorRotation(FRotator(0.f, 180.f, 0.f));
+			break;
+		case ESnakeDirection::Left:	SetActorRotation(FRotator(0.f, -90.f, 0.f));
+			break;
+		case ESnakeDirection::Right:SetActorRotation(FRotator(0.f, 90.f, 0.f));
+			break;
+	}
+}
