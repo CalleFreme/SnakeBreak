@@ -7,7 +7,6 @@
 #include "Components/SphereComponent.h"
 #include "DrawDebugHelpers.h"
 
-// Sets default values
 ASnakePawn::ASnakePawn()
 {
  	// Set this pawn to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
@@ -44,7 +43,6 @@ ASnakePawn::ASnakePawn()
 	bUseControllerRotationYaw = false;
 }
 
-// Called when the game starts or when spawned
 void ASnakePawn::BeginPlay()
 {
 	Super::BeginPlay();
@@ -89,7 +87,6 @@ void ASnakePawn::BeginPlay()
 	}
 }
 
-// Called every frame
 void ASnakePawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
