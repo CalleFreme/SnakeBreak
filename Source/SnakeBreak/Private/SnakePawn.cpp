@@ -22,12 +22,12 @@ ASnakePawn::ASnakePawn()
 	CollisionSphere->SetSphereRadius(CollisionSphereRadius);
 	CollisionSphere->SetCollisionProfileName(TEXT("Pawn")); // Set the collision profile to "Pawn", which is a predefined profile that allows it to collide with the world and other pawns, but not block the camera or other things. This is important for our snake pawn, because we want it to be able to collide with the ground and other objects, but we don't want it to block the camera or cause weird physics interactions with the box mesh.
 
-	BoxMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BoxMesh"));
-	BoxMesh->SetupAttachment(RootComponent);
-	BoxMesh->SetRelativeLocation(FVector::ZeroVector); // Center the mesh on the root component (collision sphere)
+	SnakeHeadMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SnakeHeadMesh"));
+	SnakeHeadMesh->SetupAttachment(RootComponent);
+	SnakeHeadMesh->SetRelativeLocation(FVector::ZeroVector); // Center the mesh on the root component (collision sphere)
 	// We don't want the mesh to collide with the ground or other objects, because we're going to use a separate collision sphere for that, and we want the mesh to just be a visual representation of the snake's head without affecting physics or collisions. So we set it to NoCollision, which means it won't generate any collision events or block anything. We also set SimulatePhysics to false, because we don't want the mesh to be affected by physics forces or gravity, since we're going to move it manually in the Tick function based on player input:
-	BoxMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	BoxMesh->SetSimulatePhysics(false);
+	SnakeHeadMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	SnakeHeadMesh->SetSimulatePhysics(false);
 
 	SpringArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("SpringArm"));
 	SpringArm->SetupAttachment(RootComponent);
@@ -62,6 +62,12 @@ void ASnakePawn::BeginPlay()
 		StepTargetWorldLocation = StartLocation;
 		MoveInterpolationProgress = 0.f;
 		bIsMovingToTarget = false;
+
+		CurrentBodyGridPositions.Empty();
+		PreviousBodyGridPositions.Empty();
+		AddInitialBodySegments(InitialBodyLength);
+		EnsureBodySegmentMeshCount();
+		UpdateBodyVisuals(0.f);
 	}
 	else
 	{
@@ -200,6 +206,11 @@ void ASnakePawn::TickGridMovement(float DeltaTime)
 	if (!bIsMovingToTarget)
 	{
 		// If at target, check for direction change and update target location
+		StartNewMoveStep();
+		if (!bIsMovingToTarget)
+		{
+			return; // If we failed to start a new move step (e.g. because we hit a wall), we exit early and don't try to interpolate or update the location
+		}
 		HandleDirectionChange();
 
 		const FIntPoint GridOffset = DirectionToGridOffset(CurrentDirection);
@@ -221,15 +232,196 @@ void ASnakePawn::TickGridMovement(float DeltaTime)
 	const float Alpha = FMath::Clamp(MoveInterpolationProgress, 0.f, 1.f);
 
 	// Use Lerp for constant speed across the cell
-	const FVector NewLocation = FMath::Lerp(StepStartWorldLocation, StepTargetWorldLocation, Alpha);
-	SetActorLocation(NewLocation, false);
+	const FVector NewHeadLocation = FMath::Lerp(StepStartWorldLocation, StepTargetWorldLocation, Alpha);
+	SetActorLocation(NewHeadLocation, false);
+
+	UpdateBodyVisuals(Alpha); // Since we have now moved the head, we also want to update the body segment locations to follow the head smoothly, so we call UpdateBodyVisuals with the current interpolation alpha to position the body segments correctly between their previous and current grid positions.
 
 	if (Alpha >= 1.f)
 	{
 		// We've reached the target grid location
-		CurrentGridPosition = PendingNextGridPosition;
-		SetActorLocation(StepTargetWorldLocation, false); // Ensure we snap exactly to the target location
-		bIsMovingToTarget = false; // We're now at the target, so we can start the process again on the next tick
+		FinishMoveStep();
+	}
+}
+
+void ASnakePawn::StartNewMoveStep()
+{
+	HandleDirectionChange();
+
+	HandleDirectionChange();
+
+	const FIntPoint GridOffset = DirectionToGridOffset(CurrentDirection);
+	PendingNextGridPosition = CurrentGridPosition + GridOffset;
+
+	if (WouldHitWall(PendingNextGridPosition) || WouldHitSelf(PendingNextGridPosition))
+	{
+		HandleSnakeDeath();
+		return;
+	}
+
+	// We can cache current body state before this step begins:
+	PreviousBodyGridPositions = CurrentBodyGridPositions;
+
+	StepStartWorldLocation = GridToWorldLocation(CurrentGridPosition);
+	StepTargetWorldLocation = GridToWorldLocation(PendingNextGridPosition);
+	MoveInterpolationProgress = 0.f; // Since we're just starting to move towards the new target, we reset the interpolation progress to 0
+	bIsMovingToTarget = true;
+}
+
+void ASnakePawn::FinishMoveStep()
+{
+	// We've reached the target grid location, so we update our current grid position to the pending next grid position, and we can also update the body positions now that we've officially moved into the new cell:
+	const FIntPoint OldHeadGridPosition = CurrentGridPosition;
+	CurrentGridPosition = PendingNextGridPosition;
+
+	// Body follows where the head / previous segment used to be
+	if (CurrentBodyGridPositions.Num() > 0 || PendingGrowth > 0)
+	{
+		CurrentBodyGridPositions.Insert(OldHeadGridPosition, 0);
+
+		if (PendingGrowth > 0)
+		{
+			PendingGrowth--;
+		}
+		else
+		{
+			CurrentBodyGridPositions.RemoveAt(CurrentBodyGridPositions.Num() - 1);
+		}
+	}
+
+	EnsureBodySegmentMeshCount();
+
+	SetActorLocation(StepTargetWorldLocation, false);
+	UpdateBodyVisuals(1.f);
+
+	bIsMovingToTarget = false;
+}
+
+void ASnakePawn::UpdateBodyVisuals(float Alpha)
+{
+	EnsureBodySegmentMeshCount();
+
+	for (int32 i = 0; i < BodySegmentMeshes.Num(); ++i)
+	{
+		if (!BodySegmentMeshes[i])
+		{
+			// In case we have a null mesh for some reason, skip
+			continue;
+		}
+
+		// Start cell = where this segment was before the current step
+		FIntPoint StartCell;
+		if (PreviousBodyGridPositions.IsValidIndex(i))
+		{
+			StartCell = PreviousBodyGridPositions[i];
+		}
+		else if (CurrentBodyGridPositions.IsValidIndex(i))
+		{
+			StartCell = CurrentBodyGridPositions[i]; // If we don't have a previous position for this segment (e.g. it's a new segment that just grew), we can use its current position as the start cell, so it will smoothly move from its current position to its correct position in the body
+		}
+		else
+		{
+			StartCell = CurrentGridPosition; // If we don't have a previous position for this segment (e.g. it's a new segment that just grew), we can just use the current head position as the start cell, so it will appear at the head and then smoothly move to its correct position in the body
+		}
+
+		// Target cell = where this segment should be after the current step
+		FIntPoint TargetCell;
+		if (i == 0)
+		{
+			// First segment moves into the head's old position
+			TargetCell = bIsMovingToTarget ? CurrentGridPosition : CurrentBodyGridPositions[i];
+		}
+		else
+		{
+			// Each later segment moves into the previous segment's old position
+			if (PreviousBodyGridPositions.IsValidIndex(i - 1))
+			{
+				TargetCell = PreviousBodyGridPositions[i - 1];
+			}
+			else
+			{
+				TargetCell = CurrentBodyGridPositions[i]; // If we don't have a previous position for the previous segment (e.g. it's a new segment that just grew), we can use its current position as the target cell, so it will smoothly move from its current position to its correct position in the body
+			}
+		}
+
+		const FVector StartWorldLocation = GridToWorldLocation(StartCell);
+		const FVector TargetWorldLocation = GridToWorldLocation(TargetCell);
+		const FVector NewWorldLocation = FMath::Lerp(StartWorldLocation, TargetWorldLocation, Alpha);
+
+		BodySegmentMeshes[i]->SetWorldLocation(NewWorldLocation);
+	}
+}
+
+void ASnakePawn::EnsureBodySegmentMeshCount()
+{
+	// Add missing segments
+	while (BodySegmentMeshes.Num() < CurrentBodyGridPositions.Num())
+	{
+		const int32 SegmentIndex = BodySegmentMeshes.Num();
+
+		FName ComponentName = *FString::Printf(TEXT("BodySegmentMesh_%d"), SegmentIndex); // This is a unique name for the new mesh component, based on the current number of body segment meshes. This is important for Unreal Engine's component system, because each component needs to have a unique name within the actor, and by using the index we ensure that each new body segment mesh gets a unique name like "BodySegmentMesh_0", "BodySegmentMesh_1", etc.
+		// Why is ComponentName a pointer? Because the constructor for UStaticMeshComponent takes a FName for the component name, and FName can be implicitly converted to a const FName& (which is what the constructor expects), so we can just pass ComponentName directly to the constructor. We also use NewObject to create the component, which is the recommended way to create components at runtime in Unreal Engine, because it properly initializes the component and registers it with the actor.
+		UStaticMeshComponent* NewSegmentMesh = NewObject<UStaticMeshComponent>(this, ComponentName); // "this" refers to the ASnakePawn instance. We create a new UStaticMeshComponent as a child of the snake pawn, and we give it a unique name based on the current number of body segment meshes.
+
+		if (!NewSegmentMesh)
+		{
+			UE_LOG(LogTemp, Error, TEXT("Failed to create body segment mesh component"));
+			return;
+		}
+
+		NewSegmentMesh->SetupAttachment(RootComponent);
+		NewSegmentMesh->RegisterComponent(); // We need to register the component so that it becomes part of the actor and is rendered in the world. This is important for our snake pawn, because we want the new body segment mesh to appear in the game when it's created, and registering it ensures that it will be visible and properly attached to the snake pawn.
+		NewSegmentMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		NewSegmentMesh->SetSimulatePhysics(false);
+		NewSegmentMesh->SetRelativeScale3D(BodySegmentMeshScale);
+
+		if (BodySegmentMeshAsset)
+		{
+			NewSegmentMesh->SetStaticMesh(BodySegmentMeshAsset);
+		}
+
+		if (BodySegmentMaterial)
+		{
+			NewSegmentMesh->SetMaterial(0, BodySegmentMaterial); // 0 is the material index, which means we're setting the first material slot of the mesh.
+		}
+
+		BodySegmentMeshes.Add(NewSegmentMesh);
+	}
+
+	// Remove extra segment meshes.
+	while (BodySegmentMeshes.Num() > CurrentBodyGridPositions.Num())
+	{
+		if (UStaticMeshComponent* LastSegment = BodySegmentMeshes.Last())
+		{
+			LastSegment->DestroyComponent();
+		}
+		BodySegmentMeshes.Pop();
+	}
+}
+
+void ASnakePawn::ClearBodyVisuals()
+{
+	for (UStaticMeshComponent* SegmentMesh : BodySegmentMeshes)
+	{
+		if (SegmentMesh)
+		{
+			SegmentMesh->DestroyComponent();
+		}
+	}
+	BodySegmentMeshes.Empty();
+}
+
+void ASnakePawn::AddInitialBodySegments(int32 NumSegments)
+{
+	CurrentBodyGridPositions.Empty();
+
+	const FIntPoint BackwardOffset = DirectionToGridOffset(CurrentDirection) * -1; // We want to add body segments in the opposite direction of the current movement, so we multiply the grid offset by -1 to get the backward offset.
+	FIntPoint NextBodyCell = CurrentGridPosition + BackwardOffset;
+
+	for (int32 i = 0; i < NumSegments; ++i)
+	{
+		CurrentBodyGridPositions.Add(NextBodyCell);
+		NextBodyCell += BackwardOffset; // Move the next body cell further back for the next segment
 	}
 }
 
@@ -340,6 +532,39 @@ bool ASnakePawn::WouldHitWall(const FIntPoint& NextCell) const
 		|| NextCell.Y <= 0 || NextCell.Y >= GridDimensions.Y - 1;
 }
 
+bool ASnakePawn::WouldHitSelf(const FIntPoint& NextCell) const
+{
+	if (CurrentBodyGridPositions.Num() == 0)
+	{
+		return false;
+	}
+
+	// Special case:
+	// Moving into the current tail cell is allowed if the tail will move away this step.
+	const bool bTailWillStayThisStep = (PendingGrowth > 0);
+
+	for (int32 i = 0; i < CurrentBodyGridPositions.Num(); ++i)
+	{
+		const bool bIsTail = (i == CurrentBodyGridPositions.Num() - 1);
+		if (!bTailWillStayThisStep && bIsTail)
+		{
+			continue;
+		}
+
+		if (CurrentBodyGridPositions[i] == NextCell)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void ASnakePawn::GrowSnake(int32 Amount)
+{
+	PendingGrowth += FMath::Max(Amount, 0); // Ensure we don't decrease the snake's length
+}
+
 void ASnakePawn::HandleSnakeDeath()
 {
 	if (bIsDead)
@@ -367,11 +592,23 @@ void ASnakePawn::ResetSnake()
 	
 	const FVector ResetLocation = GridToWorldLocation(CurrentGridPosition);
 	SetActorLocation(ResetLocation);
+
 	StepStartWorldLocation = ResetLocation;
 	StepTargetWorldLocation = ResetLocation;
 	MoveInterpolationProgress = 0.f;
 	bIsMovingToTarget = false;
 	bIsDead = false;
+
+	// Reset body segments
+	CurrentBodyGridPositions.Empty();
+	PreviousBodyGridPositions.Empty();
+	ClearBodyVisuals();
+
+	AddInitialBodySegments(InitialBodyLength);
+	EnsureBodySegmentMeshCount();
+	UpdateBodyVisuals(1.f); // We can call UpdateBodyVisuals with Alpha = 1 to immediately position the body segments at their correct locations based on the current grid positions, since we're resetting the snake and we want the body segments to appear in their correct positions right away without any interpolation.
+
+	PendingGrowth = 0;
 }
 
 FIntPoint ASnakePawn::GetClampedStartGridPosition() const
