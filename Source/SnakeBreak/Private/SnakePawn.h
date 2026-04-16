@@ -5,12 +5,18 @@
 #include "InputActionValue.h"
 #include "SnakePawn.generated.h"
 
+
+
 class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
 class UStaticMeshComponent;
 class USpringArmComponent;
 class USphereComponent;
+class AFoodActor;
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnFoodConsumed, int32, ScoreValue);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnSnakeDied);
 
 UENUM(BlueprintType)
 enum class ESnakeDirection : uint8
@@ -28,6 +34,18 @@ class ASnakePawn : public APawn
 
 public:
 	ASnakePawn();
+
+	UFUNCTION()
+	void HandleFoodOverlap(AFoodActor* FoodActor);
+
+	UPROPERTY(BlueprintAssignable, Category = "Snake|Events")
+	FOnFoodConsumed OnFoodConsumed;
+
+	UPROPERTY(BlueprintAssignable, Category = "Snake|Events")
+	FOnSnakeDied OnSnakeDied;
+
+	UFUNCTION(BlueprintPure, Category = "Snake")
+	TArray<FIntPoint> GetAllOccupiedGridCells() const;
 
 protected:
 	virtual void BeginPlay() override;
@@ -167,7 +185,6 @@ private:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Snake|Body", meta = (AllowPrivateAccess = "true"))
 	float BodySegmentMeshZOffset = 0.f; // How much to offset the body segment meshes on the Z axis, to prevent z-fighting with the head mesh and ground.
-
 
 
 };

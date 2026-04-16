@@ -1,4 +1,5 @@
 #include "SnakePawn.h"
+#include "FoodActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "EnhancedInputComponent.h"
@@ -211,21 +212,6 @@ void ASnakePawn::TickGridMovement(float DeltaTime)
 		{
 			return; // If we failed to start a new move step (e.g. because we hit a wall), we exit early and don't try to interpolate or update the location
 		}
-		HandleDirectionChange();
-
-		const FIntPoint GridOffset = DirectionToGridOffset(CurrentDirection);
-		PendingNextGridPosition = CurrentGridPosition + GridOffset;
-
-		if (WouldHitWall(PendingNextGridPosition))
-		{
-			HandleSnakeDeath();
-			return;
-		}
-
-		StepStartWorldLocation = GridToWorldLocation(CurrentGridPosition);
-		StepTargetWorldLocation = GridToWorldLocation(PendingNextGridPosition);
-		MoveInterpolationProgress = 0.f; // Since we're just starting to move towards the new target, we reset the interpolation progress to 0
-		bIsMovingToTarget = true;
 	}
 
 	MoveInterpolationProgress += DeltaTime / MoveStepTime;
@@ -246,8 +232,6 @@ void ASnakePawn::TickGridMovement(float DeltaTime)
 
 void ASnakePawn::StartNewMoveStep()
 {
-	HandleDirectionChange();
-
 	HandleDirectionChange();
 
 	const FIntPoint GridOffset = DirectionToGridOffset(CurrentDirection);
@@ -573,11 +557,12 @@ void ASnakePawn::HandleSnakeDeath()
 	}
 
 	bIsDead = true;
+	OnSnakeDied.Broadcast();
 	UE_LOG(LogTemp, Warning, TEXT("Snake has hit a wall and died!"));
 
 	// Pauses for a moment, then reset snake to starting position and direction for now:
 	// We can do a delay and call the ResetSnake method like this:
-	GetWorldTimerManager().SetTimer(ResetTimerHandle, this, &ASnakePawn::ResetSnake, 1.f, false); // 1 second delay, not looping
+	//GetWorldTimerManager().SetTimer(ResetTimerHandle, this, &ASnakePawn::ResetSnake, 1.f, false); // 1 second delay, not looping
 }
 
 void ASnakePawn::ResetSnake()
@@ -617,4 +602,26 @@ FIntPoint ASnakePawn::GetClampedStartGridPosition() const
 		FMath::Clamp(StartGridPosition.X, 1, GridDimensions.X - 2),
 		FMath::Clamp(StartGridPosition.Y, 1, GridDimensions.Y - 2)
 	);
+}
+
+void ASnakePawn::HandleFoodOverlap(AFoodActor* FoodActor)
+{
+	if (bIsDead || !FoodActor)
+	{
+		return;
+	}
+
+	GrowSnake(1);
+	OnFoodConsumed.Broadcast(10);
+
+	// Let GameMode decide respawn. For safety, temporarily disable overlap until moved
+	FoodActor->SetActorEnableCollision(false);
+}
+
+
+TArray<FIntPoint> ASnakePawn::GetAllOccupiedGridCells() const
+{
+	TArray<FIntPoint> Occupied = CurrentBodyGridPositions;
+	Occupied.Insert(CurrentGridPosition, 0);
+	return Occupied;
 }
