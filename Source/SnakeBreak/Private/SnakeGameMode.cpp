@@ -1,6 +1,3 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
-
 #include "SnakeGameMode.h"
 #include "SnakeGameState.h"
 #include "SnakePawn.h"
@@ -127,3 +124,4 @@ void ASnakeGameMode::ReturnToMainMenu()
 {
 	UGameplayStatics::OpenLevel(this, FName(TEXT("MainMenuMap")));
 }
+
