@@ -11,8 +11,12 @@ enum class ESnakeMatchPhase : uint8
 {
 	MainMenu,
 	Playing,
-	Outro
+	Outro,
+	None
 };
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnPhaseChangedSignature, ESnakeMatchPhase, NewPhase);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnScoreChangedSignature, int32, NewScore);
 
 /**
  * 
@@ -25,7 +29,26 @@ class SNAKEBREAK_API ASnakeGameState : public AGameStateBase
 public:
 	UPROPERTY(BlueprintReadOnly, Category = "Snake")
 	int32 Score = 0;
+	
+	// Use BlueprintAssignable so the HUD can bind to this
+	UPROPERTY(BlueprintAssignable, Category = "Snake")
+	FOnPhaseChangedSignature OnPhaseChanged;
+	
+	UPROPERTY(BlueprintAssignable, Category = "Snake")
+	FOnScoreChangedSignature OnScoreChanged;
 
+	void AddScore(int32 Amount)
+	{
+		Score += Amount;
+		OnScoreChanged.Broadcast(Score);
+	}
+	
+	void SetMatchPhase(ESnakeMatchPhase NewPhase)
+	{
+		MatchPhase = NewPhase;
+		OnPhaseChanged.Broadcast(NewPhase);
+	}
+	
 	UPROPERTY(BlueprintReadOnly, Category = "Snake")
-	ESnakeMatchPhase MatchPhase = ESnakeMatchPhase::Playing;
+	ESnakeMatchPhase MatchPhase = ESnakeMatchPhase::MainMenu;
 };

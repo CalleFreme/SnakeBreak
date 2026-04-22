@@ -58,6 +58,8 @@ private:
 	UFUNCTION()
 	void HandleSnakeDied();
 
+	UFUNCTION()
+	void ChangePhase(const ESnakeMatchPhase NewPhase);
+	
 	ASnakeGameState* GetSnakeGameState();
-
 };

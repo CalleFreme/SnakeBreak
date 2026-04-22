@@ -49,14 +49,29 @@ void AFoodActor::HandleFoodOverlap(
 	bool bFromSweep,
 	const FHitResult& SweepResult)
 {
+	if (!bIsActive) return;
+	
 	if (ASnakePawn* SnakePawn = Cast<ASnakePawn>(OtherActor))
 	{
+		bIsActive = false;
+		CollisionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		SnakePawn->HandleFoodOverlap(this);
 	}
 }
 
-void AFoodActor::SetFoodGridPosition(const FIntPoint& NewGridPosition, const FVector& NewWorldLocation)
+void AFoodActor::DeactivateFood()
+{
+	bIsActive = false;
+	CollisionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+}
+
+void AFoodActor::RespawnFood(const FIntPoint& NewGridPosition, const FVector& NewWorldLocation)
 {
 	FoodGridPosition = NewGridPosition;
-	SetActorLocation(NewWorldLocation);
+	SetActorLocation(NewWorldLocation, false, nullptr, ETeleportType::TeleportPhysics);
+
+	bIsActive = true;
+	CollisionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	CollisionSphere->SetGenerateOverlapEvents(true);
+	CollisionSphere->UpdateOverlaps();
 }

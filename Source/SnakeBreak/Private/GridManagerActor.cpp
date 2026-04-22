@@ -158,12 +158,3 @@ bool AGridManagerActor::TryGetRandomFreeCell(FIntPoint& OutCell, const TArray<FI
 	return false;
 }
 
-
-
-// Called every frame
-//void AGridManagerActor::Tick(float DeltaTime)
-//{
-//	Super::Tick(DeltaTime);
-//
-//}
-

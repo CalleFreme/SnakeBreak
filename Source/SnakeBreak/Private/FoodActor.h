@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Components/SphereComponent.h"
 #include "GameFramework/Actor.h"
 #include "FoodActor.generated.h"
 
@@ -18,13 +19,15 @@ class AFoodActor : public AActor
 public:	
 	// Sets default values for this actor's properties
 	AFoodActor();
-
-	UFUNCTION(BlueprintCallable, Category = "Food")
-	void SetFoodGridPosition(const FIntPoint& NewGridPosition, const FVector& NewWorldLocation);
-
+	
 	UFUNCTION(BlueprintPure, Category = "Food")
 	FIntPoint GetFoodGridPosition() const { return FoodGridPosition; }
-
+	
+	void DeactivateFood();
+	
+	UFUNCTION(BlueprintCallable, Category = "Food")
+	void RespawnFood(const FIntPoint& NewGridPosition, const FVector& NewWorldLocation);
+	
 protected:
 	// Called when the game starts or when spawned
 	virtual void BeginPlay() override;
@@ -43,7 +46,8 @@ public:
 	virtual void Tick(float DeltaTime) override;
 
 private:
-
+	bool bIsActive = true;
+	
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess))
 	TObjectPtr<USphereComponent> CollisionSphere;
 

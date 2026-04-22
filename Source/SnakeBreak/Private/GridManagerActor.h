@@ -76,6 +76,4 @@ public:
 private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Grid", meta = (AllowPrivateAccess))
 	TSet<FIntPoint> BlockedCells;
-
-
 };

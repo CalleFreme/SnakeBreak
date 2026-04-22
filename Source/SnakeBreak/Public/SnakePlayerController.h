@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "SnakeGameMode.h"
 #include "GameFramework/PlayerController.h"
 #include "SnakePlayerController.generated.h"
 
@@ -17,6 +18,8 @@ class SNAKEBREAK_API ASnakePlayerController : public APlayerController
 	GENERATED_BODY()
 	
 public:
+	virtual void BeginPlay() override;
+	
 	UFUNCTION(BlueprintCallable)
 	void ShowHUD();
 
@@ -28,8 +31,32 @@ public:
 
 	UFUNCTION(BlueprintCallable)
 	void HideAllWidgets();
+	
+	UFUNCTION(BlueprintCallable)
+	void RequestStartGame();
+	
+	UFUNCTION(BlueprintCallable)
+	void RequestRestartFromUI()
+	{
+		if (ASnakeGameMode* GM = GetWorld()->GetAuthGameMode<ASnakeGameMode>())
+		{
+			GM->RestartRun();
+		}
+	}
+	
+	UFUNCTION(BlueprintCallable)
+	void RequestReturnToMenuFromUI()
+	{
+		if (ASnakeGameMode* GM = GetWorld()->GetAuthGameMode<ASnakeGameMode>())
+		{
+			GM->ReturnToMainMenu();
+		}
+	}
 
 protected:
+	UFUNCTION(BlueprintCallable)
+	void HandlePhaseChanged(ESnakeMatchPhase Phase);
+	
 	UPROPERTY(EditDefaultsOnly, Category = "UI")
 	TSubclassOf<UUserWidget> HUDWidgetClass;
 

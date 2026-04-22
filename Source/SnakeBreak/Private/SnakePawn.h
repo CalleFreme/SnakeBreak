@@ -3,9 +3,9 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
 #include "InputActionValue.h"
+#include "Kismet/GameplayStatics.h"
+#include "GridManagerActor.h"
 #include "SnakePawn.generated.h"
-
-
 
 class UCameraComponent;
 class UInputAction;
@@ -47,11 +47,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Snake")
 	TArray<FIntPoint> GetAllOccupiedGridCells() const;
 
+	void ResetSnake();
+	
+	void CacheGridManager();
+	
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaTime) override;
+	virtual void PossessedBy(AController* NewController);
+	virtual void PawnClientRestart() override;
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
-
+	void SetupEnhancedInput();
+	
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Grid")
 	float CellSize = 100.f;
 
@@ -64,6 +71,9 @@ protected:
 private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Snake", meta = (AllowPrivateAccess = "true"))
 	TArray<FIntPoint> CurrentBodyGridPositions;
+	
+	UPROPERTY()
+	TObjectPtr<AGridManagerActor> GridManager;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Snake", meta = (AllowPrivateAccess = "true"))
 	int32 PendingGrowth = 0;
@@ -83,6 +93,7 @@ private:
 
 	// Snapshot of body before starting a step. So body segements can smoothly follow.
 	TArray<FIntPoint> PreviousBodyGridPositions;
+	TArray<FIntPoint> TargetBodyGridPositions;
 
 	// Transient means this variable won't be saved/loaded or replicated. We only need it at runtime to keep track of the body segment meshes. In simple terms, it tells Unreal Engine not to worry about this variable when saving the game or sending data over the network, since it's only relevant while the game is running.
 	UPROPERTY(Transient)
@@ -111,7 +122,6 @@ private:
 	bool WouldHitSelf(const FIntPoint& NextCell) const;
 
 	void HandleSnakeDeath();
-	void ResetSnake();
 
 	// Body system
 	void StartNewMoveStep();
@@ -153,7 +163,7 @@ private:
 
 	// Movement / Grid
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement", meta = (AllowPrivateAccess = "true"))
-	bool bUseGridMovement = false;
+	bool bUseGridMovement = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (AllowPrivateAccess = "true"))
 	FIntPoint StartGridPosition = FIntPoint(10, 10);

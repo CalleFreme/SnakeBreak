@@ -7,6 +7,7 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "Components/SphereComponent.h"
 #include "DrawDebugHelpers.h"
+#include "SnakeGameState.h"
 
 ASnakePawn::ASnakePawn()
 {
@@ -15,8 +16,8 @@ ASnakePawn::ASnakePawn()
 	PrimaryActorTick.TickGroup = TG_PostPhysics; // Ensures this actor tick AFTER all physics and movement has been resolved. This is important for our snake pawn, because we want to update the snake's position and direction based on player input after all movement and collision has been processed for the frame, so that the snake's movement feels responsive and accurate to the player's input without being affected by physics or collision issues.
 
 	// Automatically possess this pawn with the first player controller
-	AutoPossessPlayer = EAutoReceiveInput::Player0;
-	// Alternatively, you would set up GameMode to spawn this pawn class and possess it, but for a simple game like this, AutoPossessPlayer is easier
+	// AutoPossessPlayer = EAutoReceiveInput::Player0;
+	// Alternatively, you would set up GameMode to spawn this pawn class and possess it, but for a simple game like this
 
 	CollisionSphere = CreateDefaultSubobject<USphereComponent>(TEXT("CollisionSphere"));
 	RootComponent = CollisionSphere;
@@ -47,7 +48,20 @@ ASnakePawn::ASnakePawn()
 void ASnakePawn::BeginPlay()
 {
 	Super::BeginPlay();
-
+	
+	if (!GridManager)
+	{
+		CacheGridManager();
+		if (!GridManager)
+		{
+			UE_LOG(LogTemp, Error, TEXT("SnakePawn could not find GridManager in world."))
+		}
+		else
+		{
+			GridDimensions = GridManager->GridDimensions;
+		}
+	}
+	
 	RequestedDirection = CurrentDirection;
 	UpdateDirection(CurrentDirection);	
 
@@ -76,22 +90,6 @@ void ASnakePawn::BeginPlay()
 		StartLocation.Z += 15.f;
 		SetActorLocation(StartLocation);
 	}
-
-	// Why Cast? Because GetController() returns an AController*, but we need to check if it's an APlayerController* in order to access the local player and enhanced input subsystem. We also check if the cast is successful, because in some cases (e.g. if this pawn is possessed by an AI controller), there might not be a player controller, and we don't want to crash if that's the case.
-	if (APlayerController* PC = Cast<APlayerController>(GetController()))
-	{
-		if (ULocalPlayer* LocalPlayer = PC->GetLocalPlayer())
-		{
-			// Better name for this variable might be "EnhancedInputSubsystem" or "PlayerEnhancedInputSubsystem", but "Subsystem" is fine for this small scope. We also check if the subsystem is valid, because if we're using the Enhanced Input system, it should be there, but we want to avoid crashing if it's not for some reason (e.g. if the player controller or local player is set up in a way that doesn't include the subsystem).
-			if (UEnhancedInputLocalPlayerSubsystem* Subsystem = LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>())
-			{
-				if (InputMapping)
-				{
-					Subsystem->AddMappingContext(InputMapping, 0); // We add the Input Mapping Context to the player's Enhanced Input Subsystem, with a priority of 0 (higher priority contexts will override lower priority ones if they have overlapping bindings)
-				}
-			}
-		}
-	}
 }
 
 void ASnakePawn::Tick(float DeltaTime)
@@ -117,14 +115,40 @@ void ASnakePawn::Tick(float DeltaTime)
 	DrawDebugInfo();
 }
 
+void ASnakePawn::PossessedBy(AController* NewController)
+{
+	Super::PossessedBy(NewController);
+	SetupEnhancedInput();
+}
+
+void ASnakePawn::PawnClientRestart()
+{
+	Super::PawnClientRestart();
+	SetupEnhancedInput();
+}
+
+void ASnakePawn::SetupEnhancedInput()
+{
+	if (APlayerController* PC = Cast<APlayerController>(GetController()))
+	{
+		if (ULocalPlayer* LocalPlayer = PC->GetLocalPlayer())
+		{
+			if (UEnhancedInputLocalPlayerSubsystem* Subsystem = LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>())
+			{
+				if (InputMapping)
+				{
+					Subsystem->AddMappingContext(InputMapping, 0); // We add the Input Mapping Context to the player's Enhanced Input Subsystem, with a priority of 0 (higher priority contexts will override lower priority ones if they have overlapping bindings)
+				}
+			}
+		}
+	}
+}
+
 // Called to bind functionality to input
 void ASnakePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
-
-	// We check:
-	// 1. That the PlayerInputComponent is a UEnhancedInputComponent, which it should be if we're using the Enhanced Input system; and
-	// 2. That the MoveAction and TurnAction are set, to avoid binding to null actions
+	
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
 		if (TurnUpAction)
@@ -243,9 +267,22 @@ void ASnakePawn::StartNewMoveStep()
 		return;
 	}
 
-	// We can cache current body state before this step begins:
+	// Cache the START and the END for this specific step
 	PreviousBodyGridPositions = CurrentBodyGridPositions;
-
+	TargetBodyGridPositions.Empty(CurrentBodyGridPositions.Num());
+	
+	if (CurrentBodyGridPositions.Num() > 0)
+	{
+		// Segment 0's target is always the current Head position
+		TargetBodyGridPositions.Add(CurrentGridPosition);
+		
+		// Every other segment follows the previous segment's current position
+		for (int32 i = 1; i < CurrentBodyGridPositions.Num(); i++)
+		{
+			TargetBodyGridPositions.Add(CurrentBodyGridPositions[i - 1]);
+		}
+	}
+	
 	StepStartWorldLocation = GridToWorldLocation(CurrentGridPosition);
 	StepTargetWorldLocation = GridToWorldLocation(PendingNextGridPosition);
 	MoveInterpolationProgress = 0.f; // Since we're just starting to move towards the new target, we reset the interpolation progress to 0
@@ -262,7 +299,6 @@ void ASnakePawn::FinishMoveStep()
 	if (CurrentBodyGridPositions.Num() > 0 || PendingGrowth > 0)
 	{
 		CurrentBodyGridPositions.Insert(OldHeadGridPosition, 0);
-
 		if (PendingGrowth > 0)
 		{
 			PendingGrowth--;
@@ -272,12 +308,9 @@ void ASnakePawn::FinishMoveStep()
 			CurrentBodyGridPositions.RemoveAt(CurrentBodyGridPositions.Num() - 1);
 		}
 	}
-
-	EnsureBodySegmentMeshCount();
-
+	
 	SetActorLocation(StepTargetWorldLocation, false);
 	UpdateBodyVisuals(1.f);
-
 	bIsMovingToTarget = false;
 }
 
@@ -287,49 +320,20 @@ void ASnakePawn::UpdateBodyVisuals(float Alpha)
 
 	for (int32 i = 0; i < BodySegmentMeshes.Num(); ++i)
 	{
-		if (!BodySegmentMeshes[i])
-		{
-			// In case we have a null mesh for some reason, skip
-			continue;
-		}
+		if (!BodySegmentMeshes[i]) continue;
 
-		// Start cell = where this segment was before the current step
-		FIntPoint StartCell;
-		if (PreviousBodyGridPositions.IsValidIndex(i))
-		{
-			StartCell = PreviousBodyGridPositions[i];
-		}
-		else if (CurrentBodyGridPositions.IsValidIndex(i))
-		{
-			StartCell = CurrentBodyGridPositions[i]; // If we don't have a previous position for this segment (e.g. it's a new segment that just grew), we can use its current position as the start cell, so it will smoothly move from its current position to its correct position in the body
-		}
-		else
-		{
-			StartCell = CurrentGridPosition; // If we don't have a previous position for this segment (e.g. it's a new segment that just grew), we can just use the current head position as the start cell, so it will appear at the head and then smoothly move to its correct position in the body
-		}
-
+		// Guaranteed targets from the start of the move
+		FIntPoint StartCell = PreviousBodyGridPositions.IsValidIndex(i) ?
+		PreviousBodyGridPositions[i] : CurrentBodyGridPositions[i];
+		
 		// Target cell = where this segment should be after the current step
-		FIntPoint TargetCell;
-		if (i == 0)
-		{
-			// First segment moves into the head's old position
-			TargetCell = bIsMovingToTarget ? CurrentGridPosition : CurrentBodyGridPositions[i];
-		}
-		else
-		{
-			// Each later segment moves into the previous segment's old position
-			if (PreviousBodyGridPositions.IsValidIndex(i - 1))
-			{
-				TargetCell = PreviousBodyGridPositions[i - 1];
-			}
-			else
-			{
-				TargetCell = CurrentBodyGridPositions[i]; // If we don't have a previous position for the previous segment (e.g. it's a new segment that just grew), we can use its current position as the target cell, so it will smoothly move from its current position to its correct position in the body
-			}
-		}
+		FIntPoint TargetCell = TargetBodyGridPositions.IsValidIndex(i) ?
+		TargetBodyGridPositions[i] : StartCell;
 
 		const FVector StartWorldLocation = GridToWorldLocation(StartCell);
 		const FVector TargetWorldLocation = GridToWorldLocation(TargetCell);
+		
+		// This Lerp is now stable
 		const FVector NewWorldLocation = FMath::Lerp(StartWorldLocation, TargetWorldLocation, Alpha);
 
 		BodySegmentMeshes[i]->SetWorldLocation(NewWorldLocation);
@@ -411,7 +415,6 @@ void ASnakePawn::AddInitialBodySegments(int32 NumSegments)
 
 void ASnakePawn::TickFreeMovement(float DeltaTime)
 {
-	// Is this going to work? 
 	FVector MovementVector = GetVectorFromDirection(CurrentDirection);
 	FVector DesiredOffset = MovementVector * MoveSpeed * DeltaTime;
 	AddActorWorldOffset(DesiredOffset, true);
@@ -419,7 +422,6 @@ void ASnakePawn::TickFreeMovement(float DeltaTime)
 
 bool ASnakePawn::IsValidTurn(ESnakeDirection NewDirection) const
 {
-	// A turn is valid if it's not the same as the current direction, and it's not directly opposite to the current direction (e.g. if we're moving up, we can't turn down)
 	if (NewDirection == CurrentDirection)
 	{
 		return false;
@@ -511,9 +513,11 @@ FVector ASnakePawn::GridToWorldLocation(const FIntPoint& GridPosition) const
 
 bool ASnakePawn::WouldHitWall(const FIntPoint& NextCell) const
 {
+	if (!GridManager) return false;
 	// This assumes our border cells are walls.
-	return NextCell.X <= 0 || NextCell.X >= GridDimensions.X - 1
-		|| NextCell.Y <= 0 || NextCell.Y >= GridDimensions.Y - 1;
+	return GridManager->IsBlockedCell(NextCell); // IsWallCell?
+	//return NextCell.X <= 0 || NextCell.X >= GridDimensions.X - 1
+	//	|| NextCell.Y <= 0 || NextCell.Y >= GridDimensions.Y - 1;
 }
 
 bool ASnakePawn::WouldHitSelf(const FIntPoint& NextCell) const
@@ -551,18 +555,10 @@ void ASnakePawn::GrowSnake(int32 Amount)
 
 void ASnakePawn::HandleSnakeDeath()
 {
-	if (bIsDead)
-	{
-		return;
-	}
-
+	if (bIsDead) return;
 	bIsDead = true;
 	OnSnakeDied.Broadcast();
 	UE_LOG(LogTemp, Warning, TEXT("Snake has hit a wall and died!"));
-
-	// Pauses for a moment, then reset snake to starting position and direction for now:
-	// We can do a delay and call the ResetSnake method like this:
-	//GetWorldTimerManager().SetTimer(ResetTimerHandle, this, &ASnakePawn::ResetSnake, 1.f, false); // 1 second delay, not looping
 }
 
 void ASnakePawn::ResetSnake()
@@ -612,12 +608,10 @@ void ASnakePawn::HandleFoodOverlap(AFoodActor* FoodActor)
 	}
 
 	GrowSnake(1);
+	FoodActor->DeactivateFood();
+	
 	OnFoodConsumed.Broadcast(10);
-
-	// Let GameMode decide respawn. For safety, temporarily disable overlap until moved
-	FoodActor->SetActorEnableCollision(false);
 }
-
 
 TArray<FIntPoint> ASnakePawn::GetAllOccupiedGridCells() const
 {
@@ -625,3 +619,9 @@ TArray<FIntPoint> ASnakePawn::GetAllOccupiedGridCells() const
 	Occupied.Insert(CurrentGridPosition, 0);
 	return Occupied;
 }
+
+void ASnakePawn::CacheGridManager()
+{
+	GridManager = Cast<AGridManagerActor>(UGameplayStatics::GetActorOfClass(GetWorld(), AGridManagerActor::StaticClass()));
+}
+
