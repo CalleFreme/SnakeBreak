@@ -6,6 +6,8 @@
 #include "GameFramework/Actor.h"
 #include "GridManagerActor.generated.h"
 
+struct FSnakeStageConfig;
+
 UCLASS()
 class AGridManagerActor : public AActor
 {
@@ -44,6 +46,7 @@ protected:
 	void RebuildBlockedCells();
 	void RebuildVisualInstances();
 	void ClearVisualInstances();
+	void GenerateBorderWalls();
 
 public:	
 	// Called every frame
@@ -72,6 +75,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Visual")
 	FVector InstanceScale = FVector(1.f, 1.f, 1.f);
+	
+	UFUNCTION(BlueprintCallable, Category = "Stages")
+	void ApplyStage(const FSnakeStageConfig& stage);
 
 private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Grid", meta = (AllowPrivateAccess))

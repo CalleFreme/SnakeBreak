@@ -5,6 +5,7 @@
 #include "GridManagerActor.h"
 #include "GameFramework/PlayerController.h"
 #include "SnakePlayerController.h"
+#include "SnakeStageConfig.h"
 #include "Kismet/GameplayStatics.h"
 
 void ASnakeGameMode::BeginPlay()
@@ -38,9 +39,7 @@ void ASnakeGameMode::StartPlayingRun()
 	}
 
 	// We spawn and place important scene actors
-	SpawnSnake();
-	SpawnFood();
-	MoveFoodToRandomFreeCell();
+	LoadStage(0);
 }
 
 void ASnakeGameMode::SpawnSnake()
@@ -122,6 +121,16 @@ void ASnakeGameMode::HandleFoodConsumed(int32 ScoreValue)
 	{
 		GS->AddScore(ScoreValue);
 	}
+	
+	FoodEatenThiStage++;
+	
+	const FSnakeStageConfig& Stage = Stages[CurrentStageIndex];
+	
+	if (FoodEatenThiStage >= Stage.FoodToClear)
+	{
+		AdvanceStage();
+		return;
+	}
 
 	MoveFoodToRandomFreeCell();
 }
@@ -154,7 +163,8 @@ void ASnakeGameMode::RestartRun()
 		GS->Score = 0;
 		GS->SetMatchPhase(ESnakeMatchPhase::Playing);
 	}
-	MoveFoodToRandomFreeCell();
+	FoodEatenThiStage = 0;
+	LoadStage(0);
 }
 
 void ASnakeGameMode::ReturnToMainMenu()
@@ -162,3 +172,50 @@ void ASnakeGameMode::ReturnToMainMenu()
 	UGameplayStatics::OpenLevel(this, FName(TEXT("MainMenuMap")));
 }
 
+void ASnakeGameMode::LoadStage(int32 StageIndex)
+{
+
+	if (!Stages.IsValidIndex(StageIndex) || !GridManager) return;
+		
+	CurrentStageIndex = StageIndex;
+	FoodEatenThiStage = 0;
+		
+	const FSnakeStageConfig& Stage = Stages[StageIndex];
+		
+	GridManager->ApplyStage(Stage);
+	
+	if (SpawnedSnakePawn)
+	{
+		SpawnedSnakePawn->ApplyStageSettings(Stage.CellSize, Stage.GridDimensions, Stage.MoveStepTime);
+		SpawnedSnakePawn->ResetSnake();
+	}
+	else
+	{
+		SpawnSnake();
+		SpawnedSnakePawn->ApplyStageSettings(Stage.CellSize, Stage.GridDimensions, Stage.MoveStepTime);
+		SpawnedSnakePawn->ResetSnake();
+	}
+	
+	SpawnFood();
+	MoveFoodToRandomFreeCell();
+	
+	if (ASnakeGameState* GS = GetSnakeGameState())
+	{
+		GS->CurrentStageIndex = CurrentStageIndex;
+		GS->FoodEatenThisStage = FoodEatenThiStage;
+		GS->FoodToClearStage = Stage.FoodToClear;
+	}
+}
+
+void ASnakeGameMode::AdvanceStage()
+{
+	const int32 NextStage = CurrentStageIndex + 1;
+	
+	if (!Stages.IsValidIndex(NextStage))
+	{
+		ChangePhase(ESnakeMatchPhase::Outro);
+		return;
+	}
+	
+	LoadStage(NextStage);
+}

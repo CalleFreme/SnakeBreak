@@ -10,6 +10,7 @@ class ASnakePawn;
 class AFoodActor;
 class AGridManagerActor;
 class ASnakeGameState;
+struct FSnakeStageConfig;
 
 /**
  * 
@@ -46,11 +47,19 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<AGridManagerActor> GridManager;
+	
+	UPROPERTY(EditAnywhere, Category = "Stages")
+	TArray<FSnakeStageConfig> Stages;
+	
+	int32 CurrentStageIndex = 0;
+	int32 FoodEatenThiStage = 0;
 
 	void CacheGridManager();
 	void SpawnSnake();
 	void SpawnFood();
 	void MoveFoodToRandomFreeCell();
+	void LoadStage(int32 StageIndex);
+	void AdvanceStage();
 
 	UFUNCTION()
 	void HandleFoodConsumed(int32 ScoreValue);
