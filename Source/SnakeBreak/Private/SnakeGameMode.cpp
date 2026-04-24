@@ -163,7 +163,8 @@ void ASnakeGameMode::RestartRun()
 		GS->Score = 0;
 		GS->SetMatchPhase(ESnakeMatchPhase::Playing);
 	}
-	MoveFoodToRandomFreeCell();
+	FoodEatenThiStage = 0;
+	LoadStage(0);
 }
 
 void ASnakeGameMode::ReturnToMainMenu()
