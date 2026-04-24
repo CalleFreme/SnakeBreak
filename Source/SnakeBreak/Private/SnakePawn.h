@@ -51,6 +51,8 @@ public:
 	
 	void CacheGridManager();
 	
+	void ApplyStageSettings(float NewCellSize, FIntPoint NewGridDimensions, float NewMoveStepTime);
+	
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaTime) override;

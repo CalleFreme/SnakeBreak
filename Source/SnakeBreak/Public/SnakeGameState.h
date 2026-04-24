@@ -30,6 +30,15 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Snake")
 	int32 Score = 0;
 	
+	UPROPERTY(BlueprintReadOnly, Category = "Snake")
+	int32 CurrentStageIndex = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Snake")
+	int32 FoodEatenThisStage = 0;
+	
+	UPROPERTY(BlueprintReadOnly, Category = "Snake")
+	int32 FoodToClearStage = 1;
+	
 	// Use BlueprintAssignable so the HUD can bind to this
 	UPROPERTY(BlueprintAssignable, Category = "Snake")
 	FOnPhaseChangedSignature OnPhaseChanged;

@@ -508,6 +508,10 @@ FIntPoint ASnakePawn::DirectionToGridOffset(ESnakeDirection Direction) const
 
 FVector ASnakePawn::GridToWorldLocation(const FIntPoint& GridPosition) const
 {
+	if (GridManager)
+	{
+		return GridManager->GridToWorld(GridPosition);
+	}
 	return GridOrigin + FVector(GridPosition.X * CellSize, GridPosition.Y * CellSize, 0.f);
 }
 
@@ -623,5 +627,12 @@ TArray<FIntPoint> ASnakePawn::GetAllOccupiedGridCells() const
 void ASnakePawn::CacheGridManager()
 {
 	GridManager = Cast<AGridManagerActor>(UGameplayStatics::GetActorOfClass(GetWorld(), AGridManagerActor::StaticClass()));
+}
+
+void ASnakePawn::ApplyStageSettings(float NewCellSize, FIntPoint NewGridDimensions, float NewMoveStepTime)
+{
+	CellSize = NewCellSize;
+	GridDimensions = NewGridDimensions;
+	MoveStepTime = NewMoveStepTime;
 }
 

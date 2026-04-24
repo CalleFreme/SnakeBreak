@@ -3,6 +3,7 @@
 
 #include "GridManagerActor.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "SnakeStageConfig.h"
 #include "Components/SceneComponent.h"
 
 // Sets default values
@@ -68,51 +69,47 @@ void AGridManagerActor::RebuildBlockedCells()
 
 void AGridManagerActor::ClearVisualInstances()
 {
-	if (FloorInstances)
-	{
 		FloorInstances->ClearInstances();
-	}
-
-	if (WallInstances)
-	{
 		WallInstances->ClearInstances();
-	}
 }
 
 void AGridManagerActor::RebuildVisualInstances()
 {
 	ClearVisualInstances();
 
-	// If no mesh is assigned to the ISM components, nothing will render
-	if (!FloorInstances || !WallInstances)
+	for (int32 Y = 0; Y < GridDimensions.Y; ++Y)
 	{
-		return;
-	}
-
-	for (int32 X = 0; X < GridDimensions.X; ++X)
-	{
-		for (int32 Y = 0; Y < GridDimensions.Y; ++Y)
+		for (int32 X = 0; X < GridDimensions.X; ++X)
 		{
 			const FIntPoint Cell(X, Y);
-			const bool bBlocked = BlockedCells.Contains(Cell);
+			const FVector WorldLocation = GridToWorld(Cell);
+			//const FVector FloorLocation = WorldLocation + FVector(0.f, 0.f, FloorZOffset);
+			
+			FloorInstances->AddInstance(FTransform(WorldLocation));
 
-			const FVector BaseWorld = GridToWorld(Cell);
-
-			if (bGenerateFloor)
+			if (BlockedCells.Contains(Cell))
 			{
-				const FVector FloorLocation = BaseWorld + FVector(0.f, 0.f, FloorZOffset);
-				FTransform FloorTransform(FRotator::ZeroRotator, FloorLocation, InstanceScale);
-				FloorInstances->AddInstance(FloorTransform);
-			}
-
-			if (bBlocked)
-			{
-				const FVector WallLocation = BaseWorld + FVector(0.f, 0.f, WallZOffset);
-				FTransform WallTransform(FRotator::ZeroRotator, WallLocation, InstanceScale);
-				WallInstances->AddInstance(WallTransform);
+				const FVector WallLocation = WorldLocation + FVector(0.f, 0.f, WallZOffset);
+				WallInstances->AddInstance(FTransform(WallLocation));
 			}
 		}
+	}
+}
 
+void AGridManagerActor::GenerateBorderWalls()
+{
+	BlockedCells.Empty();
+	
+	for (int32 X = 0; X < GridDimensions.X; ++X)
+	{
+		BlockedCells.Add(FIntPoint(X, 0));
+		BlockedCells.Add(FIntPoint(X, GridDimensions.Y - 1));
+	}
+	
+	for (int32 Y = 1; Y < GridDimensions.Y - 1; ++Y)
+	{
+		BlockedCells.Add(FIntPoint(0, Y));
+		BlockedCells.Add(FIntPoint(GridDimensions.X - 1, Y));
 	}
 }
 
@@ -158,3 +155,17 @@ bool AGridManagerActor::TryGetRandomFreeCell(FIntPoint& OutCell, const TArray<FI
 	return false;
 }
 
+void AGridManagerActor::ApplyStage(const FSnakeStageConfig& Stage)
+{
+	GridDimensions = Stage.GridDimensions;
+	CellSize = Stage.CellSize;
+	
+	ClearVisualInstances();
+	BlockedCells.Empty();
+	GenerateBorderWalls();
+	
+	if (Stage.Pattern == 1) GenerateBorderWalls();
+	if (Stage.Pattern == 2) GenerateBorderWalls();
+	
+	RebuildVisualInstances();
+}
