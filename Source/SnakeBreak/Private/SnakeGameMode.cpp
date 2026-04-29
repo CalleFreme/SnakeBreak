@@ -1,8 +1,10 @@
 #include "SnakeGameMode.h"
+#include "SnakeGameInstance.h"
 #include "SnakeGameState.h"
 #include "SnakePawn.h"
 #include "FoodActor.h"
 #include "GridManagerActor.h"
+#include "SnakeGameTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "SnakePlayerController.h"
 #include "SnakeStageConfig.h"
@@ -12,7 +14,16 @@ void ASnakeGameMode::BeginPlay()
 {
 	// This is sort of the entry point of our game application!
 	Super::BeginPlay();
+	
 	CacheGridManager(); // We create and store a GridManager
+	
+	if (USnakeGameInstance* GI = GetGameInstance<USnakeGameInstance>())
+	{
+		ActiveGameMode = GI->SelectedGameMode;
+		Slot0Type = GI->Slot0Type;
+		Slot1Type = GI->Slot1Type;
+	}
+	
 	StartPlayingRun();	// We start the gameplay loop
 }
 
@@ -31,23 +42,20 @@ ASnakeGameState* ASnakeGameMode::GetSnakeGameState()
 // Set up everything needed for a new play run
 void ASnakeGameMode::StartPlayingRun()
 {
-	// We set the GameState to proper starting values (like Score = 0) 
+	BattleResult = ESnakeBattleResult::None;
+
 	if (ASnakeGameState* GS = GetSnakeGameState())
 	{
 		GS->Score = 0;
 		GS->SetMatchPhase(ESnakeMatchPhase::Playing);
 	}
 
-	// We spawn and place important scene actors
 	LoadStage(0);
 }
 
 void ASnakeGameMode::SpawnSnake()
 {
-	// This function spawns a SnakePawn instance in the world,
-	// and stores it in our SpawnedSnakePawn member variable,
-	// and binds the pawn instance and its event functions to a
-	// multi-cast delegate (i.e. this GameMode object)
+	// Legacy single-player spawn path. Prefer SpawnSnakeForSlot().
 	if (!SnakePawnClass || !GridManager)
 	{
 		return;
@@ -101,12 +109,12 @@ void ASnakeGameMode::SpawnFood()
 
 void ASnakeGameMode::MoveFoodToRandomFreeCell()
 {
-	if (!GridManager || !SpawnedFoodActor || !SpawnedSnakePawn)
+	if (!GridManager || !SpawnedFoodActor)
 	{
 		return;
 	}
 
-	TArray<FIntPoint> ForbiddenCells = SpawnedSnakePawn->GetAllOccupiedGridCells();
+	const TArray<FIntPoint> ForbiddenCells = GetAllSnakeOccupiedCells();
 
 	FIntPoint NewFoodCell;
 	if (GridManager->TryGetRandomFreeCell(NewFoodCell, ForbiddenCells))
@@ -124,23 +132,50 @@ void ASnakeGameMode::HandleFoodConsumed(int32 ScoreValue)
 	
 	FoodEatenThiStage++;
 	
-	const FSnakeStageConfig& Stage = Stages[CurrentStageIndex];
-	
-	if (FoodEatenThiStage >= Stage.FoodToClear)
+	// Later: introduce a separate rules for when Battle ends (one snake died, or score target reacher, or timer runs out)
+	if (ActiveGameMode != ESnakeGameModeType::Battle)
 	{
-		AdvanceStage();
-		return;
+		const FSnakeStageConfig& Stage = Stages[CurrentStageIndex];
+	
+		if (FoodEatenThiStage >= Stage.FoodToClear)
+		{
+			AdvanceStage();
+			return;
+		}
 	}
 
 	MoveFoodToRandomFreeCell();
 }
 
-void ASnakeGameMode::HandleSnakeDied()
+void ASnakeGameMode::HandleSnakeDied(ASnakePawn* DeadSnake)
 {
-	if (ASnakeGameState* GS = GetSnakeGameState())
+	if (ActiveGameMode != ESnakeGameModeType::Battle)
 	{
 		ChangePhase(ESnakeMatchPhase::Outro);
+		return;
 	}
+
+	const int32 DeadIndex = SpawnedSnakes.IndexOfByKey(DeadSnake);
+
+	if (DeadIndex == 0)
+	{
+		BattleResult = ESnakeBattleResult::Player0Won;
+	}
+	else if (DeadIndex == 1)
+	{
+		BattleResult = ESnakeBattleResult::Player1Won;
+	}
+	else
+	{
+		BattleResult = ESnakeBattleResult::None;
+	}
+
+	if (ASnakeGameState* GS = GetSnakeGameState())
+	{
+		GS->BattleResult = BattleResult;
+	}
+
+	ChangePhase(ESnakeMatchPhase::Outro);
 }
 
 void ASnakeGameMode::ChangePhase(const ESnakeMatchPhase NewPhase)
@@ -154,16 +189,15 @@ void ASnakeGameMode::ChangePhase(const ESnakeMatchPhase NewPhase)
 
 void ASnakeGameMode::RestartRun()
 {
-	if (SpawnedSnakePawn)
-	{
-		SpawnedSnakePawn->ResetSnake();
-	}
+	BattleResult = ESnakeBattleResult::None;
+	FoodEatenThiStage = 0;
+
 	if (ASnakeGameState* GS = GetSnakeGameState())
 	{
 		GS->Score = 0;
 		GS->SetMatchPhase(ESnakeMatchPhase::Playing);
 	}
-	FoodEatenThiStage = 0;
+
 	LoadStage(0);
 }
 
@@ -175,8 +209,11 @@ void ASnakeGameMode::ReturnToMainMenu()
 void ASnakeGameMode::LoadStage(int32 StageIndex)
 {
 
-	if (!Stages.IsValidIndex(StageIndex) || !GridManager) return;
-		
+	if (!Stages.IsValidIndex(StageIndex) || !GridManager)
+	{
+		return;
+	}
+	
 	CurrentStageIndex = StageIndex;
 	FoodEatenThiStage = 0;
 		
@@ -184,21 +221,24 @@ void ASnakeGameMode::LoadStage(int32 StageIndex)
 		
 	GridManager->ApplyStage(Stage);
 	
-	if (SpawnedSnakePawn)
-	{
-		SpawnedSnakePawn->ApplyStageSettings(Stage.CellSize, Stage.GridDimensions, Stage.MoveStepTime);
-		SpawnedSnakePawn->ResetSnake();
-	}
-	else
-	{
-		SpawnSnake();
-		SpawnedSnakePawn->ApplyStageSettings(Stage.CellSize, Stage.GridDimensions, Stage.MoveStepTime);
-		SpawnedSnakePawn->ResetSnake();
-	}
+	DestroySpawnedSnakes();
 	
+	if (ActiveGameMode == ESnakeGameModeType::NormalSinglePlayer)
+	{
+		SpawnSinglePlayerSnake();
+	}
+	else if (ActiveGameMode == ESnakeGameModeType::Battle)
+	{
+		SpawnBattleSnakes();
+	}
+	else if (ActiveGameMode == ESnakeGameModeType::Coop)
+	{
+		SpawnCoopSnakes();
+	}
+
 	SpawnFood();
 	MoveFoodToRandomFreeCell();
-	
+
 	if (ASnakeGameState* GS = GetSnakeGameState())
 	{
 		GS->CurrentStageIndex = CurrentStageIndex;
@@ -218,4 +258,217 @@ void ASnakeGameMode::AdvanceStage()
 	}
 	
 	LoadStage(NextStage);
+}
+
+ASnakePawn* ASnakeGameMode::SpawnSnakeForSlot(
+	int32 SlotIndex,
+	const FIntPoint& SpawnCell,
+	ESnakePlayerSlotType SlotType)
+{
+	if (!SnakePawnClass || !GridManager)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Cannot spawn snake: missing SnakePawnClass or GridManager."));
+		return nullptr;
+	}
+
+	const FSnakeStageConfig* Stage = Stages.IsValidIndex(CurrentStageIndex)
+		? &Stages[CurrentStageIndex]
+		: nullptr;
+
+	const FVector SpawnLocation = GridManager->GridToWorld(SpawnCell);
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = this;
+	SpawnParams.SpawnCollisionHandlingOverride =
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	ASnakePawn* NewSnake = GetWorld()->SpawnActor<ASnakePawn>(
+		SnakePawnClass,
+		SpawnLocation,
+		FRotator::ZeroRotator,
+		SpawnParams);
+
+	if (!NewSnake)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Failed to spawn snake for slot %d."), SlotIndex);
+		return nullptr;
+	}
+
+	NewSnake->OnFoodConsumed.AddDynamic(this, &ASnakeGameMode::HandleFoodConsumed);
+	NewSnake->OnSnakeDied.AddDynamic(this, &ASnakeGameMode::HandleSnakeDied);
+
+	if (Stage)
+	{
+		NewSnake->ApplyStageSettings(
+			Stage->CellSize,
+			Stage->GridDimensions,
+			Stage->MoveStepTime);
+	}
+
+	NewSnake->SetStartGridPosition(SpawnCell);
+
+	if (SlotIndex == 0)
+	{
+		NewSnake->SetInitialDirection(ESnakeDirection::Right);
+	}
+	else
+	{
+		NewSnake->SetInitialDirection(ESnakeDirection::Left);
+	}
+
+	NewSnake->ResetSnake();
+
+	if (SlotType == ESnakePlayerSlotType::Human)
+	{
+		APlayerController* PC = nullptr;
+
+		if (SlotIndex == 0)
+		{
+			PC = UGameplayStatics::GetPlayerController(this, 0);
+		}
+		else
+		{
+			// For later local multiplayer.
+			PC = UGameplayStatics::GetPlayerController(this, SlotIndex);
+
+			if (!PC)
+			{
+				PC = UGameplayStatics::CreatePlayer(this, SlotIndex, true);
+			}
+		}
+
+		if (PC)
+		{
+			PC->Possess(NewSnake);
+			UE_LOG(LogTemp, Warning, TEXT("Human player slot %d possessed snake."), SlotIndex);
+		}
+	}
+	else
+	{
+		if (!SnakeAIControllerClass)
+		{
+			UE_LOG(LogTemp, Error, TEXT("SnakeAIControllerClass is not set."));
+		}
+		else
+		{
+			FActorSpawnParameters AIParams;
+			AIParams.Owner = this;
+			AIParams.SpawnCollisionHandlingOverride =
+				ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+			AController* AIController = GetWorld()->SpawnActor<AController>(
+				SnakeAIControllerClass,
+				SpawnLocation,
+				FRotator::ZeroRotator,
+				AIParams);
+
+			if (AIController)
+			{
+				AIController->Possess(NewSnake);
+				UE_LOG(LogTemp, Warning, TEXT("AI possessed snake for slot %d."), SlotIndex);
+			}
+		}
+	}
+
+	SpawnedSnakes.Add(NewSnake);
+	return NewSnake;
+}
+
+void ASnakeGameMode::SpawnBattleSnakes()
+{
+	if (!GridManager)
+	{
+		return;
+	}
+
+	const int32 MidY = GridManager->GridDimensions.Y / 2;
+
+	const FIntPoint PlayerSpawnCell(2, MidY);
+	const FIntPoint OpponentSpawnCell(GridManager->GridDimensions.X - 3, MidY);
+
+	ASnakePawn* PlayerSnake = SpawnSnakeForSlot(0, PlayerSpawnCell, Slot0Type);
+	ASnakePawn* OpponentSnake = SpawnSnakeForSlot(1, OpponentSpawnCell, Slot1Type);
+}
+
+TArray<FIntPoint> ASnakeGameMode::GetAllSnakeOccupiedCells() const
+{
+	TArray<FIntPoint> Occupied;
+
+	for (const ASnakePawn* Snake : SpawnedSnakes)
+	{
+		if (!Snake)
+		{
+			continue;
+		}
+
+		Occupied.Append(Snake->GetAllOccupiedGridCells());
+	}
+
+	return Occupied;
+}
+
+bool ASnakeGameMode::IsCellOccupiedByOtherSnake(
+	const ASnakePawn* AskingSnake,
+	const FIntPoint& Cell) const
+{
+	for (const ASnakePawn* Snake : SpawnedSnakes)
+	{
+		if (!Snake || Snake == AskingSnake)
+		{
+			continue;
+		}
+
+		if (Snake->GetAllOccupiedGridCells().Contains(Cell))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void ASnakeGameMode::DestroySpawnedSnakes()
+{
+	for (ASnakePawn* Snake : SpawnedSnakes)
+	{
+		if (Snake)
+		{
+			Snake->Destroy();
+		}
+	}
+
+	SpawnedSnakes.Empty();
+	SpawnedSnakePawn = nullptr;
+}
+
+void ASnakeGameMode::SpawnSinglePlayerSnake()
+{
+	if (!GridManager)
+	{
+		return;
+	}
+
+	const FIntPoint SpawnCell(
+		GridManager->GridDimensions.X / 2,
+		GridManager->GridDimensions.Y / 2);
+
+	ASnakePawn* Snake = SpawnSnakeForSlot(0, SpawnCell, ESnakePlayerSlotType::Human);
+
+	SpawnedSnakePawn = Snake;
+}
+
+void ASnakeGameMode::SpawnCoopSnakes()
+{
+	if (!GridManager)
+	{
+		return;
+	}
+
+	const int32 MidY = GridManager->GridDimensions.Y / 2;
+
+	const FIntPoint Player1SpawnCell(2, MidY);
+	const FIntPoint Player2SpawnCell(GridManager->GridDimensions.X - 3, MidY);
+
+	SpawnSnakeForSlot(0, Player1SpawnCell, Slot0Type);
+	SpawnSnakeForSlot(1, Player2SpawnCell, Slot1Type);
 }

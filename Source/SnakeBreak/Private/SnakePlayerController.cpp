@@ -2,7 +2,7 @@
 
 
 #include "SnakePlayerController.h"
-
+#include "SnakeGameInstance.h"
 #include "SnakeGameState.h"
 #include "Blueprint/UserWidget.h"
 #include "Kismet/GameplayStatics.h"
@@ -30,6 +30,46 @@ void ASnakePlayerController::BeginPlay()
 void ASnakePlayerController::RequestStartGame()
 {
 	// Should use a TSoftObjectPtr<UWorld> member to pick level from a dropdown in editor
+	UGameplayStatics::OpenLevel(this, FName(TEXT("TestGridLevel")));
+}
+
+void ASnakePlayerController::RequestStartNormalSinglePlayer()
+{
+	if (USnakeGameInstance* GI = GetGameInstance<USnakeGameInstance>())
+	{
+		GI->ConfigureNormalSinglePlayer();
+	}
+
+	UGameplayStatics::OpenLevel(this, FName(TEXT("TestGridLevel")));
+}
+
+void ASnakePlayerController::RequestStartBattleVsAI()
+{
+	if (USnakeGameInstance* GI = GetGameInstance<USnakeGameInstance>())
+	{
+		GI->ConfigureBattleVsAI();
+	}
+
+	UGameplayStatics::OpenLevel(this, FName(TEXT("TestGridLevel")));
+}
+
+void ASnakePlayerController::RequestStartBattleLocal()
+{
+	if (USnakeGameInstance* GI = GetGameInstance<USnakeGameInstance>())
+	{
+		GI->ConfigureBattleLocal();
+	}
+
+	UGameplayStatics::OpenLevel(this, FName(TEXT("TestGridLevel")));
+}
+
+void ASnakePlayerController::RequestStartCoopLocal()
+{
+	if (USnakeGameInstance* GI = GetGameInstance<USnakeGameInstance>())
+	{
+		GI->ConfigureCoopLocal();
+	}
+
 	UGameplayStatics::OpenLevel(this, FName(TEXT("TestGridLevel")));
 }
 

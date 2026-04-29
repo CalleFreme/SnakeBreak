@@ -7,6 +7,7 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "Components/SphereComponent.h"
 #include "DrawDebugHelpers.h"
+#include "SnakeGameMode.h"
 #include "SnakeGameState.h"
 
 ASnakePawn::ASnakePawn()
@@ -174,38 +175,33 @@ void ASnakePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent
 
 void ASnakePawn::Input_TryTurnUp(const FInputActionValue& Value)
 {
-	bool bPressed = Value.Get<bool>();
-	if (bPressed)
+	if (Value.Get<bool>())
 	{
-
-		RequestedDirection = ESnakeDirection::Up;
+		RequestDirection(ESnakeDirection::Up);
 	}
 }
 
 void ASnakePawn::Input_TryTurnDown(const FInputActionValue& Value)
 {
-	bool bPressed = Value.Get<bool>();
-	if (bPressed)
+	if (Value.Get<bool>())
 	{
-		RequestedDirection = ESnakeDirection::Down;
+		RequestDirection(ESnakeDirection::Down);
 	}
 }
 
 void ASnakePawn::Input_TryTurnLeft(const FInputActionValue& Value)
 {
-	bool bPressed = Value.Get<bool>();
-	if (bPressed)
+	if (Value.Get<bool>())
 	{
-		RequestedDirection = ESnakeDirection::Left;
+		RequestDirection(ESnakeDirection::Left);
 	}
 }
 
 void ASnakePawn::Input_TryTurnRight(const FInputActionValue& Value)
 {
-	bool bPressed = Value.Get<bool>();
-	if (bPressed)
+	if (Value.Get<bool>())
 	{
-		RequestedDirection = ESnakeDirection::Right;
+		RequestDirection(ESnakeDirection::Right);
 	}
 }
 
@@ -261,12 +257,25 @@ void ASnakePawn::StartNewMoveStep()
 	const FIntPoint GridOffset = DirectionToGridOffset(CurrentDirection);
 	PendingNextGridPosition = CurrentGridPosition + GridOffset;
 
-	if (WouldHitWall(PendingNextGridPosition) || WouldHitSelf(PendingNextGridPosition))
+	// if (WouldHitWall(PendingNextGridPosition) || WouldHitSelf(PendingNextGridPosition))
+	// {
+	// 	HandleSnakeDeath();
+	// 	return;
+	// }
+
+	ASnakeGameMode* SnakeGM = GetWorld()->GetAuthGameMode<ASnakeGameMode>();
+
+	const bool bWouldHitOtherSnake =
+		SnakeGM && SnakeGM->IsCellOccupiedByOtherSnake(this, PendingNextGridPosition);
+
+	if (WouldHitWall(PendingNextGridPosition) ||
+		WouldHitSelf(PendingNextGridPosition) ||
+		bWouldHitOtherSnake)
 	{
 		HandleSnakeDeath();
 		return;
 	}
-
+	
 	// Cache the START and the END for this specific step
 	PreviousBodyGridPositions = CurrentBodyGridPositions;
 	TargetBodyGridPositions.Empty(CurrentBodyGridPositions.Num());
@@ -494,7 +503,7 @@ void ASnakePawn::DrawDebugInfo()
 	DrawDebugDirectionalArrow(GetWorld(), RightStart, RightEnd, 50.f, FColor::Red, false, -1.f, 0, 3.0f);
 }
 
-FIntPoint ASnakePawn::DirectionToGridOffset(ESnakeDirection Direction) const
+FIntPoint ASnakePawn::DirectionToGridOffset(ESnakeDirection Direction)
 {
 	switch (Direction)
 	{
@@ -517,11 +526,12 @@ FVector ASnakePawn::GridToWorldLocation(const FIntPoint& GridPosition) const
 
 bool ASnakePawn::WouldHitWall(const FIntPoint& NextCell) const
 {
-	if (!GridManager) return false;
-	// This assumes our border cells are walls.
-	return GridManager->IsBlockedCell(NextCell); // IsWallCell?
-	//return NextCell.X <= 0 || NextCell.X >= GridDimensions.X - 1
-	//	|| NextCell.Y <= 0 || NextCell.Y >= GridDimensions.Y - 1;
+	if (!GridManager)
+	{
+		return false;
+	}
+	
+	return GridManager->IsBlockedCell(NextCell);
 }
 
 bool ASnakePawn::WouldHitSelf(const FIntPoint& NextCell) const
@@ -559,9 +569,13 @@ void ASnakePawn::GrowSnake(int32 Amount)
 
 void ASnakePawn::HandleSnakeDeath()
 {
-	if (bIsDead) return;
+	if (bIsDead)
+	{
+		return;
+	}
+	
 	bIsDead = true;
-	OnSnakeDied.Broadcast();
+	OnSnakeDied.Broadcast(this); // THIS snake has died
 	UE_LOG(LogTemp, Warning, TEXT("Snake has hit a wall and died!"));
 }
 
@@ -571,10 +585,10 @@ void ASnakePawn::ResetSnake()
 	CurrentGridPosition = SpawnCell;
 	PendingNextGridPosition = SpawnCell;
 
-	CurrentDirection = ESnakeDirection::Right;
-	RequestedDirection = ESnakeDirection::Right;
+	CurrentDirection = StartDirection;
+	RequestedDirection = StartDirection;
 	UpdateDirection(CurrentDirection);
-	
+
 	const FVector ResetLocation = GridToWorldLocation(CurrentGridPosition);
 	SetActorLocation(ResetLocation);
 
@@ -584,14 +598,14 @@ void ASnakePawn::ResetSnake()
 	bIsMovingToTarget = false;
 	bIsDead = false;
 
-	// Reset body segments
 	CurrentBodyGridPositions.Empty();
 	PreviousBodyGridPositions.Empty();
+	TargetBodyGridPositions.Empty();
 	ClearBodyVisuals();
 
 	AddInitialBodySegments(InitialBodyLength);
 	EnsureBodySegmentMeshCount();
-	UpdateBodyVisuals(1.f); // We can call UpdateBodyVisuals with Alpha = 1 to immediately position the body segments at their correct locations based on the current grid positions, since we're resetting the snake and we want the body segments to appear in their correct positions right away without any interpolation.
+	UpdateBodyVisuals(1.f);
 
 	PendingGrowth = 0;
 }
@@ -636,3 +650,46 @@ void ASnakePawn::ApplyStageSettings(float NewCellSize, FIntPoint NewGridDimensio
 	MoveStepTime = NewMoveStepTime;
 }
 
+void ASnakePawn::SetStartGridPosition(FIntPoint NewStartGridPosition)
+{
+	StartGridPosition = NewStartGridPosition;
+}
+
+bool ASnakePawn::RequestDirection(ESnakeDirection NewDirection)
+{
+	if (!CanRequestDirection(NewDirection))
+	{
+		return false;
+	}
+
+	RequestedDirection = NewDirection;
+	return true;
+}
+
+bool ASnakePawn::CanRequestDirection(ESnakeDirection NewDirection) const
+{
+	if (bIsDead)
+	{
+		return false;
+	}
+
+	if (NewDirection == CurrentDirection)
+	{
+		return true;
+	}
+
+	return IsValidTurn(NewDirection);
+}
+
+FIntPoint ASnakePawn::GetNextCellForDirection(ESnakeDirection Direction) const
+{
+	return CurrentGridPosition + DirectionToGridOffset(Direction);
+}
+
+void ASnakePawn::SetInitialDirection(ESnakeDirection NewDirection)
+{
+	StartDirection = NewDirection;
+	CurrentDirection = NewDirection;
+	RequestedDirection = NewDirection;
+	UpdateDirection(NewDirection);
+}
