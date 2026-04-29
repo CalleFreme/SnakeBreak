@@ -52,6 +52,18 @@ public:
 			GM->ReturnToMainMenu();
 		}
 	}
+	
+	UFUNCTION(BlueprintCallable)
+	void RequestStartNormalSinglePlayer();
+
+	UFUNCTION(BlueprintCallable)
+	void RequestStartBattleVsAI();
+
+	UFUNCTION(BlueprintCallable)
+	void RequestStartBattleLocal();
+
+	UFUNCTION(BlueprintCallable)
+	void RequestStartCoopLocal();
 
 protected:
 	UFUNCTION(BlueprintCallable)

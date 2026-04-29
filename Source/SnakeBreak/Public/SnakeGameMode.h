@@ -1,9 +1,10 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// Start/restart run, load stages, spawn snake/food, handle food eaten/death, tell GameState about match result
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
+#include "SnakeGameTypes.h"
 #include "SnakeGameMode.generated.h"
 
 class ASnakePawn;
@@ -31,6 +32,12 @@ public:
 	
 	UFUNCTION(BlueprintCallable, Category = "Snake")
 	void RestartRun();
+	
+	ASnakePawn* SpawnSnakeForSlot(int32 SlotIndex, const FIntPoint& SpawnCell, ESnakePlayerSlotType SlotType);
+	void SpawnBattleSnakes();
+	TArray<FIntPoint> GetAllSnakeOccupiedCells() const;
+	
+	bool IsCellOccupiedByOtherSnake(const ASnakePawn* AskingSnake, const FIntPoint& Cell) const;
 
 private:
 	UPROPERTY(EditDefaultsOnly, Category = "Snake")
@@ -41,6 +48,28 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<ASnakePawn> SpawnedSnakePawn;
+	
+	// Need: All spawned snakes, the AI player controller, track if battle mode, player slots
+	UPROPERTY()
+	TArray<TObjectPtr<ASnakePawn>> SpawnedSnakes;
+	
+	UPROPERTY(EditDefaultsOnly, Category = "Snake|AI")
+	TSubclassOf<AController> SnakeAIControllerClass;
+	
+	UPROPERTY(EditAnywhere, Category = "Snake|Mode")
+	bool bUseBattleMode = true;
+	
+	UPROPERTY(EditAnywhere, Category = "Snake|Battle")
+	ESnakePlayerSlotType Slot0Type = ESnakePlayerSlotType::Human;
+
+	UPROPERTY(EditAnywhere, Category = "Snake|Battle")
+	ESnakePlayerSlotType Slot1Type = ESnakePlayerSlotType::AI;
+	
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Snake|Mode", meta = (AllowPrivateAccess = "true"))
+	ESnakeGameModeType ActiveGameMode = ESnakeGameModeType::NormalSinglePlayer;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Snake|Battle", meta = (AllowPrivateAccess = "true"))
+	ESnakeBattleResult BattleResult = ESnakeBattleResult::None;
 	
 	UPROPERTY()
 	TObjectPtr<AFoodActor> SpawnedFoodActor;
@@ -60,12 +89,15 @@ private:
 	void MoveFoodToRandomFreeCell();
 	void LoadStage(int32 StageIndex);
 	void AdvanceStage();
+	void DestroySpawnedSnakes();
+	void SpawnSinglePlayerSnake();
+	void SpawnCoopSnakes();
 
 	UFUNCTION()
 	void HandleFoodConsumed(int32 ScoreValue);
 
 	UFUNCTION()
-	void HandleSnakeDied();
+	void HandleSnakeDied(ASnakePawn* DeadSnake);
 
 	UFUNCTION()
 	void ChangePhase(const ESnakeMatchPhase NewPhase);

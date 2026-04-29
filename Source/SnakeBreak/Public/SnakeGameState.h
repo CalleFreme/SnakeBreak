@@ -1,8 +1,10 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// Score, current phase, current stage info
+// shared or per-player score, battle winner, data needed by HUD/Outro
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "SnakeGameTypes.h"
 #include "GameFramework/GameStateBase.h"
 #include "SnakeGameState.generated.h"
 
@@ -46,6 +48,9 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Snake")
 	FOnScoreChangedSignature OnScoreChanged;
 
+	UPROPERTY(BlueprintReadOnly, Category = "Snake|Battle")
+	ESnakeBattleResult BattleResult = ESnakeBattleResult::None;
+	
 	void AddScore(int32 Amount)
 	{
 		Score += Amount;

@@ -16,7 +16,7 @@ class USphereComponent;
 class AFoodActor;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnFoodConsumed, int32, ScoreValue);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnSnakeDied);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSnakeDied, ASnakePawn*, DeadSnake);
 
 UENUM(BlueprintType)
 enum class ESnakeDirection : uint8
@@ -53,6 +53,40 @@ public:
 	
 	void ApplyStageSettings(float NewCellSize, FIntPoint NewGridDimensions, float NewMoveStepTime);
 	
+	UFUNCTION(BlueprintCallable, Category = "Snake|Grid")
+	void SetStartGridPosition(FIntPoint NewStartGridPosition);
+	
+	UFUNCTION(BlueprintCallable, Category = "Snake|Movement")
+	bool RequestDirection(ESnakeDirection NewDirection);
+	
+	UFUNCTION(BlueprintPure, Category = "Snake|Movement")
+	ESnakeDirection GetCurrentDirection() const { return CurrentDirection; }
+
+	UFUNCTION(BlueprintPure, Category = "Snake|Movement")
+	ESnakeDirection GetRequestedDirection() const { return RequestedDirection; }
+
+	UFUNCTION(BlueprintPure, Category = "Snake|Grid")
+	FIntPoint GetCurrentGridPosition() const { return CurrentGridPosition; }
+
+	UFUNCTION(BlueprintPure, Category = "Snake|State")
+	bool IsDead() const { return bIsDead; }
+
+	UFUNCTION(BlueprintPure, Category = "Snake|Movement")
+	bool IsMovingToTarget() const { return bIsMovingToTarget; }
+
+	UFUNCTION(BlueprintPure, Category = "Snake|Movement")
+	float GetMoveStepTime() const { return MoveStepTime; }
+
+	UFUNCTION(BlueprintPure, Category = "Snake|Grid")
+	FIntPoint GetNextCellForDirection(ESnakeDirection Direction) const;
+	
+	void SetInitialDirection(ESnakeDirection NewDirection);
+	
+	UFUNCTION(BlueprintPure, Category = "Snake|Movement")
+	bool CanRequestDirection(ESnakeDirection NewDirection) const;
+	
+	static FIntPoint DirectionToGridOffset(ESnakeDirection Direction);
+	
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaTime) override;
@@ -80,6 +114,9 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Snake", meta = (AllowPrivateAccess = "true"))
 	int32 PendingGrowth = 0;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Snake|Movement", meta = (AllowPrivateAccess = "true"))
+	ESnakeDirection StartDirection = ESnakeDirection::Right;
+	
 	ESnakeDirection CurrentDirection = ESnakeDirection::Right;
 	ESnakeDirection RequestedDirection = ESnakeDirection::Right;
 	FIntPoint CurrentGridPosition = FIntPoint(0, 0);
@@ -103,7 +140,6 @@ private:
 
 	// Helpers
 	FVector GetVectorFromDirection(ESnakeDirection Direction) const;
-	FIntPoint DirectionToGridOffset(ESnakeDirection Direction) const;
 	FVector GridToWorldLocation(const FIntPoint& GridPosition) const;
 
 	// Input callback functions
