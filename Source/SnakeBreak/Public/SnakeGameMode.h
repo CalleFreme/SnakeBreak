@@ -103,4 +103,6 @@ private:
 	void ChangePhase(const ESnakeMatchPhase NewPhase);
 	
 	ASnakeGameState* GetSnakeGameState();
+	
+	APlayerController* GetOrCreateLocalPlayerController(int32 SlotIndex);
 };

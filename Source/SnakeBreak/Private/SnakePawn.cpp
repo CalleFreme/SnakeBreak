@@ -4,6 +4,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "InputMappingContext.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Components/SphereComponent.h"
 #include "DrawDebugHelpers.h"
@@ -130,18 +131,69 @@ void ASnakePawn::PawnClientRestart()
 
 void ASnakePawn::SetupEnhancedInput()
 {
-	if (APlayerController* PC = Cast<APlayerController>(GetController()))
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC)
 	{
-		if (ULocalPlayer* LocalPlayer = PC->GetLocalPlayer())
-		{
-			if (UEnhancedInputLocalPlayerSubsystem* Subsystem = LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>())
-			{
-				if (InputMapping)
-				{
-					Subsystem->AddMappingContext(InputMapping, 0); // We add the Input Mapping Context to the player's Enhanced Input Subsystem, with a priority of 0 (higher priority contexts will override lower priority ones if they have overlapping bindings)
-				}
-			}
-		}
+		return;
+	}
+
+	ULocalPlayer* LocalPlayer = PC->GetLocalPlayer();
+	if (!LocalPlayer)
+	{
+		return;
+	}
+
+	UEnhancedInputLocalPlayerSubsystem* Subsystem =
+		LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>();
+
+	if (!Subsystem)
+	{
+		return;
+	}
+
+	// Important when restarting / re-possessing:
+	// avoid stacking stale contexts.
+	if (KeyboardInputMapping)
+	{
+		Subsystem->RemoveMappingContext(KeyboardInputMapping);
+	}
+
+	if (GamepadInputMapping)
+	{
+		Subsystem->RemoveMappingContext(GamepadInputMapping);
+	}
+
+	const int32 LocalPlayerIndex = LocalPlayer->GetControllerId();
+
+	// For our supported setup:
+	// Player 0 = keyboard
+	// Player 1 = gamepad
+	UInputMappingContext* MappingToUse = nullptr;
+
+	if (PlayerSlotIndex == 0)
+	{
+		MappingToUse = KeyboardInputMapping;
+	}
+	else if (PlayerSlotIndex == 1)
+	{
+		MappingToUse = GamepadInputMapping;
+	}
+
+	if (MappingToUse)
+	{
+		Subsystem->AddMappingContext(MappingToUse, 0);
+
+		UE_LOG(LogTemp, Warning,
+			TEXT("Snake slot %d added input mapping %s for LocalPlayer ControllerId %d."),
+			PlayerSlotIndex,
+			*MappingToUse->GetName(),
+			LocalPlayerIndex);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("Snake slot %d has no input mapping assigned."),
+			PlayerSlotIndex);
 	}
 }
 
@@ -150,27 +202,69 @@ void ASnakePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 	
-	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent))
-	{
-		if (TurnUpAction)
-		{
-			EnhancedInputComponent->BindAction(TurnUpAction, ETriggerEvent::Triggered, this, &ASnakePawn::Input_TryTurnUp);
-		}
-		if (TurnDownAction)
-		{
-			EnhancedInputComponent->BindAction(TurnDownAction, ETriggerEvent::Triggered, this, &ASnakePawn::Input_TryTurnDown);
-		}
+	UEnhancedInputComponent* EnhancedInputComponent =
+		Cast<UEnhancedInputComponent>(PlayerInputComponent);
 
-		if (TurnLeftAction)
-		{
-			EnhancedInputComponent->BindAction(TurnLeftAction, ETriggerEvent::Triggered, this, &ASnakePawn::Input_TryTurnLeft);
-		}
-		if (TurnRightAction)
-		{
-			EnhancedInputComponent->BindAction(TurnRightAction, ETriggerEvent::Triggered, this, &ASnakePawn::Input_TryTurnRight);
-		}
+	if (!EnhancedInputComponent)
+	{
+		return;
 	}
 
+	if (TurnKeyboardAction)
+	{
+		EnhancedInputComponent->BindAction(
+			TurnKeyboardAction,
+			ETriggerEvent::Triggered,
+			this,
+			&ASnakePawn::Input_TurnKeyboard);
+	}
+
+	if (TurnGamepadAction)
+	{
+		EnhancedInputComponent->BindAction(
+			TurnGamepadAction,
+			ETriggerEvent::Triggered,
+			this,
+			&ASnakePawn::Input_TurnGamepad);
+
+		EnhancedInputComponent->BindAction(
+			TurnGamepadAction,
+			ETriggerEvent::Completed,
+			this,
+			&ASnakePawn::Input_TurnGamepadCompleted);
+	}
+}
+
+void ASnakePawn::Input_TurnKeyboard(const FInputActionValue& Value)
+{
+	HandleTurnVector(Value.Get<FVector2D>());
+}
+
+void ASnakePawn::Input_TurnGamepad(const FInputActionValue& Value)
+{
+	const FVector2D Input = Value.Get<FVector2D>();
+
+	constexpr float DeadZone = 0.5f;
+
+	if (Input.SizeSquared() < DeadZone * DeadZone)
+	{
+		return;
+	}
+
+	if (!bGamepadStickTurnReady)
+	{
+		return;
+	}
+
+	if (HandleTurnVector(Input))
+	{
+		bGamepadStickTurnReady = false;
+	}
+}
+
+void ASnakePawn::Input_TurnGamepadCompleted(const FInputActionValue& Value)
+{
+	bGamepadStickTurnReady = true;
 }
 
 void ASnakePawn::Input_TryTurnUp(const FInputActionValue& Value)
@@ -203,6 +297,31 @@ void ASnakePawn::Input_TryTurnRight(const FInputActionValue& Value)
 	{
 		RequestDirection(ESnakeDirection::Right);
 	}
+}
+
+bool ASnakePawn::HandleTurnVector(const FVector2D& Input)
+{
+	if (Input.IsNearlyZero())
+	{
+		return false;
+	}
+
+	ESnakeDirection DesiredDirection;
+
+	if (FMath::Abs(Input.X) > FMath::Abs(Input.Y))
+	{
+		DesiredDirection = Input.X > 0.f
+			? ESnakeDirection::Right
+			: ESnakeDirection::Left;
+	}
+	else
+	{
+		DesiredDirection = Input.Y > 0.f
+			? ESnakeDirection::Up
+			: ESnakeDirection::Down;
+	}
+
+	return RequestDirection(DesiredDirection);
 }
 
 FVector ASnakePawn::GetVectorFromDirection(ESnakeDirection Direction) const
@@ -692,4 +811,9 @@ void ASnakePawn::SetInitialDirection(ESnakeDirection NewDirection)
 	CurrentDirection = NewDirection;
 	RequestedDirection = NewDirection;
 	UpdateDirection(NewDirection);
+}
+
+void ASnakePawn::SetPlayerSlotIndex(int32 NewPlayerSlotIndex)
+{
+	PlayerSlotIndex = NewPlayerSlotIndex;
 }
