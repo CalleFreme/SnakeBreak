@@ -87,6 +87,9 @@ public:
 	
 	static FIntPoint DirectionToGridOffset(ESnakeDirection Direction);
 	
+	UFUNCTION(BlueprintCallable, Category = "Snake|Player")
+	void SetPlayerSlotIndex(int32 NewPlayerSlotIndex);
+	
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaTime) override;
@@ -94,6 +97,9 @@ protected:
 	virtual void PawnClientRestart() override;
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 	void SetupEnhancedInput();
+	
+	UPROPERTY()
+	bool bGamepadStickTurnReady = true;
 	
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Grid")
 	float CellSize = 100.f;
@@ -105,6 +111,9 @@ protected:
 	float MoveStepTime = 0.2f; // Time it takes to move from one grid cell to the next when using grid movement.
 
 private:
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Snake|Player", meta = (AllowPrivateAccess = "true"))
+	int32 PlayerSlotIndex = INDEX_NONE;
+	
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Snake", meta = (AllowPrivateAccess = "true"))
 	TArray<FIntPoint> CurrentBodyGridPositions;
 	
@@ -143,11 +152,15 @@ private:
 	FVector GridToWorldLocation(const FIntPoint& GridPosition) const;
 
 	// Input callback functions
+	void Input_TurnKeyboard(const FInputActionValue& Value);
+	void Input_TurnGamepad(const FInputActionValue& Value);
+	void Input_TurnGamepadCompleted(const FInputActionValue& Value);
 	void Input_TryTurnUp(const FInputActionValue& Value);
 	void Input_TryTurnDown(const FInputActionValue& Value);
 	void Input_TryTurnLeft(const FInputActionValue& Value);
 	void Input_TryTurnRight(const FInputActionValue& Value);
 
+	bool HandleTurnVector(const FVector2D& Input);
 	void HandleDirectionChange();
 	void UpdateDirection(ESnakeDirection NewDirection);
 	void TickGridMovement(float DeltaTime);
@@ -185,8 +198,17 @@ private:
 
 	// Input
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UInputMappingContext> InputMapping;
+	TObjectPtr<UInputMappingContext> KeyboardInputMapping;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UInputMappingContext> GamepadInputMapping;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UInputAction> TurnKeyboardAction;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UInputAction> TurnGamepadAction;
+	
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UInputAction> TurnUpAction;
 

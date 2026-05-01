@@ -113,7 +113,13 @@ void ASnakePlayerController::ShowHUD()
 {
 	HideAllWidgets();
 	if (!HUDWidgetClass) return;
-
+	
+	// We need to guard from every controller creating a full HUD/duplicate widgets
+	if (UGameplayStatics::GetPlayerController(this, 0) != this)
+	{
+		return;
+	}
+	
 	ActiveWidget = CreateWidget<UUserWidget>(this, HUDWidgetClass);
 	if (ActiveWidget)
 	{
