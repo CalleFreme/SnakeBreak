@@ -8,6 +8,7 @@
 #include "GameFramework/PlayerController.h"
 #include "SnakePlayerController.h"
 #include "SnakeStageConfig.h"
+#include "Components/AudioComponent.h"
 #include "Kismet/GameplayStatics.h"
 
 void ASnakeGameMode::BeginPlay()
@@ -25,6 +26,13 @@ void ASnakeGameMode::BeginPlay()
 	}
 	
 	StartPlayingRun();	// We start the gameplay loop
+	StartAmbientMusic();
+}
+
+void ASnakeGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	StopAmbientMusic();
+	Super::EndPlay(EndPlayReason);
 }
 
 // The GameMode is responsible for holding some important entities, such as a GridManager:
@@ -123,8 +131,10 @@ void ASnakeGameMode::MoveFoodToRandomFreeCell()
 	}
 }
 
-void ASnakeGameMode::HandleFoodConsumed(int32 ScoreValue)
+void ASnakeGameMode::HandleFoodConsumed(ASnakePawn* EatingSnake, int32 ScoreValue)
 {
+	PlayEatSound(EatingSnake);
+
 	if (ASnakeGameState* GS = GetSnakeGameState())
 	{
 		GS->AddScore(ScoreValue);
@@ -149,6 +159,8 @@ void ASnakeGameMode::HandleFoodConsumed(int32 ScoreValue)
 
 void ASnakeGameMode::HandleSnakeDied(ASnakePawn* DeadSnake)
 {
+	PlayCollisionSound(DeadSnake);
+
 	if (ActiveGameMode != ESnakeGameModeType::Battle)
 	{
 		ChangePhase(ESnakeMatchPhase::Outro);
@@ -184,6 +196,94 @@ void ASnakeGameMode::ChangePhase(const ESnakeMatchPhase NewPhase)
 	{
 		// The GameMode sets the state, does care about driving UI
 		GS->SetMatchPhase(NewPhase);
+	}
+}
+
+void ASnakeGameMode::PlayEatSound(ASnakePawn* EatingSnake) const
+{
+	if (!EatingSnake)
+	{
+		return;
+	}
+
+	if (EatingSnake->IsPlayerControlled())
+	{
+		if (HumanEatSound)
+		{
+			UGameplayStatics::PlaySound2D(this, HumanEatSound);
+		}
+		return;
+	}
+
+	if (AIEatSound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(
+			this,
+			AIEatSound,
+			EatingSnake->GetActorLocation());
+	}
+}
+
+void ASnakeGameMode::PlayCollisionSound(ASnakePawn* DeadSnake) const
+{
+	if (!DeadSnake || !CollisionSound)
+	{
+		return;
+	}
+
+	UGameplayStatics::PlaySound2D(
+		this,
+		CollisionSound,
+		1.f,
+		1.f,
+		0.f,
+		nullptr,
+		DeadSnake,
+		true);
+}
+
+void ASnakeGameMode::StartAmbientMusic()
+{
+	if (!AmbientMusic || AmbientMusicComponent)
+	{
+		return;
+	}
+
+	AmbientMusicComponent = UGameplayStatics::SpawnSound2D(
+		this,
+		AmbientMusic,
+		1.f,
+		1.f,
+		0.f,
+		nullptr,
+		true,
+		false);
+
+	if (AmbientMusicComponent)
+	{
+		AmbientMusicComponent->OnAudioFinished.AddDynamic(
+			this,
+			&ASnakeGameMode::HandleAmbientMusicFinished);
+	}
+}
+
+void ASnakeGameMode::StopAmbientMusic()
+{
+	if (!AmbientMusicComponent)
+	{
+		return;
+	}
+
+	AmbientMusicComponent->OnAudioFinished.RemoveAll(this);
+	AmbientMusicComponent->Stop();
+	AmbientMusicComponent = nullptr;
+}
+
+void ASnakeGameMode::HandleAmbientMusicFinished()
+{
+	if (AmbientMusicComponent && AmbientMusic)
+	{
+		AmbientMusicComponent->Play(0.f);
 	}
 }
 
@@ -320,27 +420,24 @@ ASnakePawn* ASnakeGameMode::SpawnSnakeForSlot(
 
 	if (SlotType == ESnakePlayerSlotType::Human)
 	{
-		APlayerController* PC = nullptr;
-
-		if (SlotIndex == 0)
+		APlayerController* PC = GetOrCreateLocalPlayerController(SlotIndex);
+		
+		if (PC)
 		{
-			PC = UGameplayStatics::GetPlayerController(this, 0);
+			NewSnake->SetPlayerSlotIndex(SlotIndex); // PossessedBy() calls SetupEnhancedInput(), which uses player slot index
+			PC->Possess(NewSnake);
+
+			UE_LOG(LogTemp, Warning,
+				TEXT("Human player slot %d possessed snake %s with controller %s."),
+				SlotIndex,
+				*NewSnake->GetName(),
+				*PC->GetName());
 		}
 		else
 		{
-			// For later local multiplayer.
-			PC = UGameplayStatics::GetPlayerController(this, SlotIndex);
-
-			if (!PC)
-			{
-				PC = UGameplayStatics::CreatePlayer(this, SlotIndex, true);
-			}
-		}
-
-		if (PC)
-		{
-			PC->Possess(NewSnake);
-			UE_LOG(LogTemp, Warning, TEXT("Human player slot %d possessed snake."), SlotIndex);
+			UE_LOG(LogTemp, Error,
+				TEXT("Could not get/create PlayerController for slot %d."),
+				SlotIndex);
 		}
 	}
 	else
@@ -471,4 +568,32 @@ void ASnakeGameMode::SpawnCoopSnakes()
 
 	SpawnSnakeForSlot(0, Player1SpawnCell, Slot0Type);
 	SpawnSnakeForSlot(1, Player2SpawnCell, Slot1Type);
+}
+
+APlayerController* ASnakeGameMode::GetOrCreateLocalPlayerController(int32 SlotIndex)
+{
+	APlayerController* PC = UGameplayStatics::GetPlayerController(this, SlotIndex);
+
+	if (!PC && SlotIndex > 0)
+	{
+		PC = UGameplayStatics::CreatePlayer(this, SlotIndex, true);
+
+		UE_LOG(LogTemp, Warning,
+			TEXT("Created local player %d. Controller: %s"),
+			SlotIndex,
+			PC ? *PC->GetName() : TEXT("None"));
+	}
+	
+	// Temporary logs
+	for (int32 i = 0; i < 2; ++i)
+	{
+		APlayerController* PCTest = UGameplayStatics::GetPlayerController(this, i);
+		UE_LOG(LogTemp, Warning,
+			TEXT("Controller %d = %s, Pawn = %s"),
+			i,
+			PCTest ? *PCTest->GetName() : TEXT("None"),
+			(PCTest && PCTest->GetPawn()) ? *PCTest->GetPawn()->GetName() : TEXT("None"));
+	}
+
+	return PC;
 }
