@@ -17,7 +17,7 @@ void ASnakePlayerController::BeginPlay()
 	// Bind to the GameState event. We want to react on phase change only when it happens.
 	if (ASnakeGameState* GS = GetWorld()->GetGameState<ASnakeGameState>())
 	{
-		GS->OnPhaseChanged.AddDynamic(this, &ASnakePlayerController::HandlePhaseChanged);
+		GS->OnPhaseChanged.AddUniqueDynamic(this, &ASnakePlayerController::HandlePhaseChanged);
 		
 		// If the game is already in a state, manually trigger handler once to catch up
 		if (GS->MatchPhase != ESnakeMatchPhase::None)
