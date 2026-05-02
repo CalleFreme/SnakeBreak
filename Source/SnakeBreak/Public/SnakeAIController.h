@@ -36,7 +36,7 @@ private:
 	ESnakeAIMode AIMode = ESnakeAIMode::GreedySafe;
 
 	UPROPERTY(EditAnywhere, Category = "Snake|AI")
-	bool bDrawDebugAI = true;
+	bool bDrawDebugAI = false;
 
 	UPROPERTY()
 	TObjectPtr<ASnakePawn> ControlledSnake;
@@ -47,7 +47,14 @@ private:
 	UPROPERTY()
 	TObjectPtr<AFoodActor> FoodActor;
 
-	float DecisionCooldown = 0.f;
+	UPROPERTY(EditAnywhere, Category = "Snake|AI", meta = (ClampMin = "0"))
+	int32 RecentCellMemory = 8;
+
+	UPROPERTY(EditAnywhere, Category = "Snake|AI", meta = (ClampMin = "1"))
+	int32 MinimumReachableSpaceBuffer = 4;
+
+	TArray<FIntPoint> RecentHeadCells;
+	FIntPoint LastRememberedHeadCell = FIntPoint(INDEX_NONE, INDEX_NONE);
 
 	void CacheWorldReferences();
 
@@ -57,6 +64,12 @@ private:
 	void DecideFreeMovingNav();
 
 	bool IsCellSafe(const FIntPoint& Cell) const;
+	bool IsCellReachableAfterMove(const FIntPoint& Cell, const TSet<FIntPoint>& ProjectedSelfCells) const;
+	int32 CountReachableCellsAfterMove(const FIntPoint& NextCell) const;
+	int32 GetRecentCellPenalty(const FIntPoint& Cell) const;
+	int32 GetContestedCellPenalty(const FIntPoint& Cell) const;
+	int32 GetTurnPenalty(ESnakeDirection Direction) const;
+	void RememberCurrentHeadCell();
 	TArray<ESnakeDirection> GetCandidateDirections() const;
 	ESnakeDirection DirectionFromStep(const FIntPoint& From, const FIntPoint& To) const;
 	

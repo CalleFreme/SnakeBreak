@@ -41,12 +41,12 @@ void ASnakeAIController::UpdateAI(float DeltaSeconds)
 {
 	// Alternatively, GameMode could expose the current Food/Grid references directly, 
 	// or broadcast an even when the food actor changes.
-	if (!GridManager || !FoodActor)
+	if (!IsValid(GridManager) || !IsValid(FoodActor))
 	{
 		CacheWorldReferences();
 	}
 	
-	if (!GridManager || !FoodActor)
+	if (!IsValid(GridManager) || !IsValid(FoodActor))
 	{
 		return;
 	}
@@ -63,6 +63,8 @@ void ASnakeAIController::UpdateAI(float DeltaSeconds)
 	{
 		return;
 	}
+
+	RememberCurrentHeadCell();
 
 	switch (AIMode)
 	{
@@ -102,41 +104,27 @@ bool ASnakeAIController::IsCellSafe(const FIntPoint& Cell) const
 		return false;
 	}
 
-	if (GridManager->IsBlockedCell(Cell))
-	{
-		return false;
-	}
-
-	if (ControlledSnake->GetAllOccupiedGridCells().Contains(Cell))
-	{
-		return false;
-	}
-
-	if (ASnakeGameMode* GM = GetWorld()->GetAuthGameMode<ASnakeGameMode>())
-	{
-		if (GM->IsCellOccupiedByOtherSnake(ControlledSnake, Cell))
-		{
-			return false;
-		}
-	}
-
-	return true;
+	return ControlledSnake->IsNextGridCellSafe(Cell);
 }
 
 void ASnakeAIController::DecideGreedySafe()
 {
-	// Simple but not very robust. Can trap itself.
 	if (!ControlledSnake || !FoodActor)
 	{
 		return;
 	}
 
 	const FIntPoint FoodCell = FoodActor->GetFoodGridPosition();
+	const int32 OccupiedCellCount = ControlledSnake->GetAllOccupiedGridCells().Num();
+	const int32 MinimumUsefulSpace = OccupiedCellCount + MinimumReachableSpaceBuffer;
 
 	bool bFoundMove = false;
 	ESnakeDirection BestDirection = ControlledSnake->GetCurrentDirection();
 	int32 BestScore = TNumericLimits<int32>::Max();
 
+	// This is still greedy, but it is no longer only "closest to food".
+	// Each legal move is scored by food distance, available space, loop history,
+	// and a tiny turn cost. Lower scores are better.
 	for (ESnakeDirection Direction : GetCandidateDirections())
 	{
 		if (!ControlledSnake->CanRequestDirection(Direction))
@@ -150,19 +138,24 @@ void ASnakeAIController::DecideGreedySafe()
 		{
 			continue;
 		}
-		// This will also reject illegal 180-turns.
-		// But RequestDirection changes state, so don't call it yet.
-		// Add a public CanRequestDirection(...) if you want this cleaner.
+
 		const int32 Distance =
 			FMath::Abs(NextCell.X - FoodCell.X) +
 			FMath::Abs(NextCell.Y - FoodCell.Y);
 
-		int32 Score = Distance;
-		
-		// Prefer moves that do not immediately enter a dead end.
-		if (!HasEscapeMoveFrom(NextCell))
+		const int32 ReachableCells = CountReachableCellsAfterMove(NextCell);
+
+		int32 Score = Distance * 10;
+		Score += GetRecentCellPenalty(NextCell);
+		Score += GetContestedCellPenalty(NextCell);
+		Score += GetTurnPenalty(Direction);
+
+		// Flood-fill space is a cheap local substitute for pathfinding.
+		// If a move leaves less room than the snake's body plus a buffer,
+		// treat it as risky even when it technically has an exit.
+		if (ReachableCells < MinimumUsefulSpace)
 		{
-			Score += 1000;
+			Score += (MinimumUsefulSpace - ReachableCells) * 50;
 		}
 
 		if (Score < BestScore)
@@ -177,15 +170,142 @@ void ASnakeAIController::DecideGreedySafe()
 	{
 		ControlledSnake->RequestDirection(BestDirection);
 		
-		UE_LOG(LogTemp, Log, TEXT("AI chose %s with score %d"),
-			*UEnum::GetValueAsString(BestDirection),
-			BestScore);
+		if (bDrawDebugAI)
+		{
+			UE_LOG(LogTemp, Log, TEXT("AI chose %s with score %d"),
+				*UEnum::GetValueAsString(BestDirection),
+				BestScore);
+		}
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("AI found no safe move."));
+		if (bDrawDebugAI)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("AI found no safe move."));
+		}
 	}
 
+}
+
+bool ASnakeAIController::IsCellReachableAfterMove(
+	const FIntPoint& Cell,
+	const TSet<FIntPoint>& ProjectedSelfCells) const
+{
+	if (!GridManager)
+	{
+		return false;
+	}
+
+	if (!GridManager->IsInsidePlayableArea(Cell) || GridManager->IsBlockedCell(Cell))
+	{
+		return false;
+	}
+
+	if (ProjectedSelfCells.Contains(Cell))
+	{
+		return false;
+	}
+
+	const ASnakeGameMode* GM = GetWorld()->GetAuthGameMode<ASnakeGameMode>();
+	return !GM || !GM->IsCellOccupiedByOtherSnake(ControlledSnake, Cell);
+}
+
+int32 ASnakeAIController::CountReachableCellsAfterMove(const FIntPoint& NextCell) const
+{
+	if (!ControlledSnake || !GridManager)
+	{
+		return 0;
+	}
+
+	TSet<FIntPoint> ProjectedSelfCells;
+	ControlledSnake->GetProjectedOccupiedGridCellsAfterMove(NextCell, ProjectedSelfCells);
+
+	TSet<FIntPoint> Visited;
+	TArray<FIntPoint> Frontier;
+	Frontier.Add(NextCell);
+	Visited.Add(NextCell);
+
+	// Breadth-first flood fill from the candidate head cell. This estimates
+	// how much open board the snake can still reach after committing to a move.
+	for (int32 FrontierIndex = 0; FrontierIndex < Frontier.Num(); ++FrontierIndex)
+	{
+		const FIntPoint Current = Frontier[FrontierIndex];
+
+		for (ESnakeDirection Direction : GetCandidateDirections())
+		{
+			const FIntPoint Neighbor = Current + ASnakePawn::DirectionToGridOffset(Direction);
+			if (Visited.Contains(Neighbor))
+			{
+				continue;
+			}
+
+			if (!IsCellReachableAfterMove(Neighbor, ProjectedSelfCells))
+			{
+				continue;
+			}
+
+			Visited.Add(Neighbor);
+			Frontier.Add(Neighbor);
+		}
+	}
+
+	return Visited.Num();
+}
+
+int32 ASnakeAIController::GetRecentCellPenalty(const FIntPoint& Cell) const
+{
+	int32 Penalty = 0;
+
+	for (int32 i = 0; i < RecentHeadCells.Num(); ++i)
+	{
+		if (RecentHeadCells[i] == Cell)
+		{
+			// Recent repeats are more likely to indicate a local loop.
+			Penalty += (RecentHeadCells.Num() - i) * 8;
+		}
+	}
+
+	return Penalty;
+}
+
+int32 ASnakeAIController::GetContestedCellPenalty(const FIntPoint& Cell) const
+{
+	const ASnakeGameMode* GM = GetWorld()->GetAuthGameMode<ASnakeGameMode>();
+	if (!GM || !GM->IsCellReachableByOtherSnakeHead(ControlledSnake, Cell))
+	{
+		return 0;
+	}
+
+	// This is a risk penalty, not a hard block. A contested cell may still be
+	// the only legal move, but the AI should avoid voluntary head-on races.
+	return 250;
+}
+
+int32 ASnakeAIController::GetTurnPenalty(ESnakeDirection Direction) const
+{
+	return Direction == ControlledSnake->GetCurrentDirection() ? 0 : 2;
+}
+
+void ASnakeAIController::RememberCurrentHeadCell()
+{
+	if (!ControlledSnake || RecentCellMemory <= 0)
+	{
+		return;
+	}
+
+	const FIntPoint CurrentCell = ControlledSnake->GetCurrentGridPosition();
+	if (CurrentCell == LastRememberedHeadCell)
+	{
+		return;
+	}
+
+	RecentHeadCells.Add(CurrentCell);
+	LastRememberedHeadCell = CurrentCell;
+
+	while (RecentHeadCells.Num() > RecentCellMemory)
+	{
+		RecentHeadCells.RemoveAt(0);
+	}
 }
 
 void ASnakeAIController::DecideGridAStar()
@@ -200,11 +320,6 @@ void ASnakeAIController::DecideFreeMovingNav()
 
 bool ASnakeAIController::HasEscapeMoveFrom(const FIntPoint& Cell) const
 {
-	// A more accurate version could simulate:
-	// - current head moves to NextCell
-	// - body shifts forwards
-	// - tail may disappear unless growing
-	// - then evalue follow-up moves
 	int32 SafeFollowUpMoves = 0;
 
 	for (ESnakeDirection Direction : GetCandidateDirections())
