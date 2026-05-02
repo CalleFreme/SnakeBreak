@@ -689,7 +689,7 @@ bool ASnakeGameMode::IsCellReachableByOtherSnakeHead(
 			ESnakeDirection::Right
 		})
 		{
-			if (Snake->CanRequestDirection(Direction) &&
+			if (Snake->CanMoveInDirection(Direction) &&
 				Snake->GetNextCellForDirection(Direction) == Cell)
 			{
 				return true;

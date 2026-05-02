@@ -11,10 +11,14 @@
 class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
+class UPrimitiveComponent;
 class UStaticMeshComponent;
 class USpringArmComponent;
 class USphereComponent;
+class USnakeBodyComponent;
 class AFoodActor;
+class AHazard;
+struct FHitResult;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnFoodConsumed, ASnakePawn*, EatingSnake, int32, ScoreValue);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSnakeDied, ASnakePawn*, DeadSnake);
@@ -47,15 +51,6 @@ public:
 		int32 OtherBodyIndex,
 		bool bFromSweep,
 		const FHitResult& SweepResult);
-	
-	UFUNCTION()
-	void HandleBodySegmentOverlap(
-		UPrimitiveComponent* OverlappedComponent,
-		AActor* OtherActor,
-		UPrimitiveComponent* OtherComp,
-		int32 OtherBodyIndex,
-		bool bFromSweep,
-		const FHitResult& SweepResult);	
 
 	UPROPERTY(BlueprintAssignable, Category = "Snake|Events")
 	FOnFoodConsumed OnFoodConsumed;
@@ -111,6 +106,9 @@ public:
 	
 	UFUNCTION(BlueprintPure, Category = "Snake|Movement")
 	bool CanRequestDirection(ESnakeDirection NewDirection) const;
+
+	UFUNCTION(BlueprintPure, Category = "Snake|Movement")
+	bool CanMoveInDirection(ESnakeDirection Direction) const;
 	
 	static FIntPoint DirectionToGridOffset(ESnakeDirection Direction);
 	
@@ -141,14 +139,8 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Snake|Player", meta = (AllowPrivateAccess = "true"))
 	int32 PlayerSlotIndex = INDEX_NONE;
 	
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Snake", meta = (AllowPrivateAccess = "true"))
-	TArray<FIntPoint> CurrentBodyGridPositions;
-	
 	UPROPERTY()
 	TObjectPtr<AGridManagerActor> GridManager;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Snake", meta = (AllowPrivateAccess = "true"))
-	int32 PendingGrowth = 0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Snake|Movement", meta = (AllowPrivateAccess = "true"))
 	ESnakeDirection StartDirection = ESnakeDirection::Right;
@@ -165,14 +157,6 @@ private:
 	bool bIsMovingToTarget = false;
 	bool bIsDead = false;
 	FTimerHandle ResetTimerHandle;
-
-	// Snapshot of body before starting a step. So body segements can smoothly follow.
-	TArray<FIntPoint> PreviousBodyGridPositions;
-	TArray<FIntPoint> TargetBodyGridPositions;
-
-	// Transient means this variable won't be saved/loaded or replicated. We only need it at runtime to keep track of the body segment meshes. In simple terms, it tells Unreal Engine not to worry about this variable when saving the game or sending data over the network, since it's only relevant while the game is running.
-	UPROPERTY(Transient)
-	TArray<TObjectPtr<UStaticMeshComponent>> BodySegmentMeshes;
 
 	// Helpers
 	FVector GetVectorFromDirection(ESnakeDirection Direction) const;
@@ -204,15 +188,6 @@ private:
 	// Body system
 	void StartNewMoveStep();
 	void FinishMoveStep();
-	void EnsureBodySegmentMeshCount(); // Need a way to make sure we have the right number of body segment meshes to match the body segments in CurrentBodyGridPositions. This function adds or removes meshes as needed.
-	void EnsureBodySegmentColliderCount();
-	void ClearBodyVisuals();
-	void ClearBodySegmentColliders();
-	void AddInitialBodySegments(int32 NumSegments);
-	void UpdateBodySegments(float Alpha);
-	void UpdateBodyVisuals(float Alpha); // Alpha is 0 to 1 representing progress from current grid cell to next grid cell
-	void UpdateBodySegmentColliders(float Alpha);
-	USphereComponent* CreateBodySegmentCollider(int32 SegmentIndex, const FIntPoint& GridCell);
 	void GrowSnake(int32 Amount = 1);
 
 	// Components
@@ -221,6 +196,9 @@ private:
 		
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USphereComponent> CollisionSphere;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USnakeBodyComponent> SnakeBodyComponent;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USpringArmComponent> SpringArm;
@@ -272,24 +250,6 @@ private:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Debug", meta = (AllowPrivateAccess = "true"))
 	bool bShowDebugCollision = false;
 
-	// Body visuals settings
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Snake|Body", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UStaticMesh> BodySegmentMeshAsset = nullptr;
-	
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Snake|Body", meta = (AllowPrivateAccess = "true"))
-	TArray<TObjectPtr<USphereComponent>> BodySegmentColliders;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Snake|Body", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UMaterialInterface> BodySegmentMaterial = nullptr;
-	
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Snake", meta = (AllowPrivateAccess = "true"))
 	int32 InitialBodyLength = 3;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Snake|Body", meta = (AllowPrivateAccess = "true"))
-	FVector BodySegmentMeshScale = FVector(0.9f, 0.9f, 0.9f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Snake|Body", meta = (AllowPrivateAccess = "true"))
-	float BodySegmentMeshZOffset = 0.f; // How much to offset the body segment meshes on the Z axis, to prevent z-fighting with the head mesh and ground.
-
-
 };
