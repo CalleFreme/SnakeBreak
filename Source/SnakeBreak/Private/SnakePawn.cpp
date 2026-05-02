@@ -114,7 +114,10 @@ void ASnakePawn::Tick(float DeltaTime)
 		TickFreeMovement(DeltaTime);
 	}
 
-	DrawDebugInfo();
+	if (bShowDebugCollision)
+	{
+		DrawDebugInfo();
+	}
 }
 
 void ASnakePawn::PossessedBy(AController* NewController)
@@ -382,14 +385,7 @@ void ASnakePawn::StartNewMoveStep()
 	// 	return;
 	// }
 
-	ASnakeGameMode* SnakeGM = GetWorld()->GetAuthGameMode<ASnakeGameMode>();
-
-	const bool bWouldHitOtherSnake =
-		SnakeGM && SnakeGM->IsCellOccupiedByOtherSnake(this, PendingNextGridPosition);
-
-	if (WouldHitWall(PendingNextGridPosition) ||
-		WouldHitSelf(PendingNextGridPosition) ||
-		bWouldHitOtherSnake)
+	if (!IsNextGridCellSafe(PendingNextGridPosition))
 	{
 		HandleSnakeDeath();
 		return;
@@ -590,13 +586,18 @@ void ASnakePawn::HandleDirectionChange()
 	{
 		CurrentDirection = RequestedDirection;
 		UpdateDirection(CurrentDirection);
-		UE_LOG(LogTemp, Warning, TEXT("Direction changed to: %s"), *UEnum::GetValueAsString(CurrentDirection));
+		UE_LOG(LogTemp, Verbose, TEXT("Direction changed to: %s"), *UEnum::GetValueAsString(CurrentDirection));
 	}
 }
 
 void ASnakePawn::DrawDebugInfo()
 {
-	if (bShowDebugCollision && CollisionSphere)
+	if (!bShowDebugCollision)
+	{
+		return;
+	}
+
+	if (CollisionSphere)
 	{
 		DrawDebugSphere(
 			GetWorld(),
@@ -755,6 +756,51 @@ TArray<FIntPoint> ASnakePawn::GetAllOccupiedGridCells() const
 	TArray<FIntPoint> Occupied = CurrentBodyGridPositions;
 	Occupied.Insert(CurrentGridPosition, 0);
 	return Occupied;
+}
+
+bool ASnakePawn::IsNextGridCellSafe(const FIntPoint& NextCell, bool bCheckOtherSnakes) const
+{
+	if (WouldHitWall(NextCell) || WouldHitSelf(NextCell))
+	{
+		return false;
+	}
+
+	if (bCheckOtherSnakes)
+	{
+		const ASnakeGameMode* SnakeGM = GetWorld()->GetAuthGameMode<ASnakeGameMode>();
+		if (SnakeGM && SnakeGM->IsCellOccupiedByOtherSnake(this, NextCell))
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+void ASnakePawn::GetProjectedOccupiedGridCellsAfterMove(
+	const FIntPoint& NextCell,
+	TSet<FIntPoint>& OutOccupiedCells) const
+{
+	OutOccupiedCells.Reset();
+	OutOccupiedCells.Add(NextCell);
+
+	if (CurrentBodyGridPositions.Num() == 0 && PendingGrowth <= 0)
+	{
+		return;
+	}
+
+	// After a legal move the old head becomes the first body segment.
+	OutOccupiedCells.Add(CurrentGridPosition);
+
+	const bool bTailWillStayThisStep = PendingGrowth > 0;
+	const int32 BodyCellsToKeep = bTailWillStayThisStep
+		? CurrentBodyGridPositions.Num()
+		: CurrentBodyGridPositions.Num() - 1;
+
+	for (int32 i = 0; i < BodyCellsToKeep; ++i)
+	{
+		OutOccupiedCells.Add(CurrentBodyGridPositions[i]);
+	}
 }
 
 void ASnakePawn::CacheGridManager()

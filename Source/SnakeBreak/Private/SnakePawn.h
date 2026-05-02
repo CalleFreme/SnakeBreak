@@ -47,6 +47,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Snake")
 	TArray<FIntPoint> GetAllOccupiedGridCells() const;
 
+	bool IsNextGridCellSafe(const FIntPoint& NextCell, bool bCheckOtherSnakes = true) const;
+	void GetProjectedOccupiedGridCellsAfterMove(const FIntPoint& NextCell, TSet<FIntPoint>& OutOccupiedCells) const;
+
 	void ResetSnake();
 	
 	void CacheGridManager();
@@ -93,7 +96,7 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaTime) override;
-	virtual void PossessedBy(AController* NewController);
+	virtual void PossessedBy(AController* NewController) override;
 	virtual void PawnClientRestart() override;
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 	void SetupEnhancedInput();
@@ -238,7 +241,7 @@ private:
 	float CollisionSphereRadius = 32.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Debug", meta = (AllowPrivateAccess = "true"))
-	bool bShowDebugCollision = true;
+	bool bShowDebugCollision = false;
 
 	// Body visuals settings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Snake|Body", meta = (AllowPrivateAccess = "true"))

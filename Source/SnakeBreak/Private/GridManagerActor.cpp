@@ -152,6 +152,19 @@ bool AGridManagerActor::TryGetRandomFreeCell(FIntPoint& OutCell, const TArray<FI
 		return true;
 	}
 
+	for (int32 Y = 1; Y < GridDimensions.Y - 1; ++Y)
+	{
+		for (int32 X = 1; X < GridDimensions.X - 1; ++X)
+		{
+			const FIntPoint Candidate(X, Y);
+			if (!BlockedCells.Contains(Candidate) && !ForbiddenSet.Contains(Candidate))
+			{
+				OutCell = Candidate;
+				return true;
+			}
+		}
+	}
+
 	return false;
 }
 
