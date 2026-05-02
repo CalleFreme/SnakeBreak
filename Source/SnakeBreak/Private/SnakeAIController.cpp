@@ -127,7 +127,7 @@ void ASnakeAIController::DecideGreedySafe()
 	// and a tiny turn cost. Lower scores are better.
 	for (ESnakeDirection Direction : GetCandidateDirections())
 	{
-		if (!ControlledSnake->CanRequestDirection(Direction))
+		if (!ControlledSnake->CanMoveInDirection(Direction))
 		{
 			continue;
 		}
