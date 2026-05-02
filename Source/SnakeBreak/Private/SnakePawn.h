@@ -15,7 +15,7 @@ class USpringArmComponent;
 class USphereComponent;
 class AFoodActor;
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnFoodConsumed, int32, ScoreValue);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnFoodConsumed, ASnakePawn*, EatingSnake, int32, ScoreValue);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSnakeDied, ASnakePawn*, DeadSnake);
 
 UENUM(BlueprintType)

@@ -11,6 +11,8 @@ class ASnakePawn;
 class AFoodActor;
 class AGridManagerActor;
 class ASnakeGameState;
+class UAudioComponent;
+class USoundBase;
 struct FSnakeStageConfig;
 
 /**
@@ -23,6 +25,7 @@ class SNAKEBREAK_API ASnakeGameMode : public AGameModeBase
 	
 public:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	UFUNCTION(BlueprintCallable, Category = "Snake")
 	void StartPlayingRun();
@@ -79,6 +82,21 @@ private:
 	
 	UPROPERTY(EditAnywhere, Category = "Stages")
 	TArray<FSnakeStageConfig> Stages;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Snake|Audio")
+	TObjectPtr<USoundBase> HumanEatSound;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Snake|Audio")
+	TObjectPtr<USoundBase> AIEatSound;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Snake|Audio")
+	TObjectPtr<USoundBase> CollisionSound;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Snake|Audio")
+	TObjectPtr<USoundBase> AmbientMusic;
+
+	UPROPERTY()
+	TObjectPtr<UAudioComponent> AmbientMusicComponent;
 	
 	int32 CurrentStageIndex = 0;
 	int32 FoodEatenThiStage = 0;
@@ -95,12 +113,21 @@ private:
 
 	UFUNCTION()
 	void HandleFoodConsumed(int32 ScoreValue);
+	void HandleFoodConsumed(ASnakePawn* EatingSnake, int32 ScoreValue);
 
 	UFUNCTION()
 	void HandleSnakeDied(ASnakePawn* DeadSnake);
 
 	UFUNCTION()
 	void ChangePhase(const ESnakeMatchPhase NewPhase);
+
+	UFUNCTION()
+	void HandleAmbientMusicFinished();
+
+	void PlayEatSound(ASnakePawn* EatingSnake) const;
+	void PlayCollisionSound(ASnakePawn* DeadSnake) const;
+	void StartAmbientMusic();
+	void StopAmbientMusic();
 	
 	ASnakeGameState* GetSnakeGameState();
 	

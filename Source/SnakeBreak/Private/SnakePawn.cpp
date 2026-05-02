@@ -747,7 +747,7 @@ void ASnakePawn::HandleFoodOverlap(AFoodActor* FoodActor)
 	GrowSnake(1);
 	FoodActor->DeactivateFood();
 	
-	OnFoodConsumed.Broadcast(10);
+	OnFoodConsumed.Broadcast(this, 10);
 }
 
 TArray<FIntPoint> ASnakePawn::GetAllOccupiedGridCells() const
