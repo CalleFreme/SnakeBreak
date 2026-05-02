@@ -5,6 +5,7 @@
 #include "FoodActor.h"
 #include "GridManagerActor.h"
 #include "SnakeGameTypes.h"
+#include "Hazard.h"
 #include "GameFramework/PlayerController.h"
 #include "SnakePlayerController.h"
 #include "SnakeStageConfig.h"
@@ -129,6 +130,145 @@ void ASnakeGameMode::MoveFoodToRandomFreeCell()
 	{
 		SpawnedFoodActor->RespawnFood(NewFoodCell, GridManager->GridToWorld(NewFoodCell));
 	}
+	else
+	{
+		SpawnedFoodActor->DeactivateFood();
+		UE_LOG(LogTemp, Warning, TEXT("No free cell available for food."));
+	}
+}
+
+void ASnakeGameMode::SpawnHazards(const FSnakeStageConfig& Config)
+{
+	if (!GridManager)
+	{
+		return;
+	}
+
+	for (int32 HazardIndex = 0; HazardIndex < Config.Hazards.Num(); ++HazardIndex)
+	{
+		const FHazardSpawnData& HazardData = Config.Hazards[HazardIndex];
+		if (!ValidateHazardSpawnData(HazardData, HazardIndex))
+		{
+			continue;
+		}
+
+		const FVector SpawnLocation = GridManager->GridToWorld(HazardData.SpawnCell);
+
+		AHazard* Hazard = GetWorld()->SpawnActor<AHazard>(
+			HazardData.HazardClass,
+			SpawnLocation,
+			HazardData.Rotation);
+
+		if (!Hazard)
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("Failed to spawn hazard %s."),
+				*HazardData.HazardClass->GetName());
+			continue;
+		}
+
+		if (!Hazard->HasAssignedVisualMesh())
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("Hazard %s spawned without a visual mesh. Assign one on the hazard Blueprint's HazardMesh component."),
+				*Hazard->GetName());
+		}
+
+		if (UGridMovementComponent* GridMovementComp =
+			Hazard->FindComponentByClass<UGridMovementComponent>())
+		{
+			const TArray<FIntPoint> ValidPatrolCells = GetValidatedPatrolCells(HazardData, Hazard);
+
+			GridMovementComp->ConfigurePatrol(
+				ValidPatrolCells,
+				HazardData.MovementSpeed,
+				HazardData.PatrolWaitSeconds,
+				HazardData.bAutoStartPatrol);
+		}
+
+		if (ALaserWall* LaserWall = Cast<ALaserWall>(Hazard))
+		{
+			LaserWall->InitializeLaser(HazardData.ToggleRateSeconds);
+		}
+
+		SpawnedHazards.Add(Hazard);
+	}
+}
+
+bool ASnakeGameMode::ValidateHazardSpawnData(const FHazardSpawnData& HazardData, int32 HazardIndex) const
+{
+	if (!HazardData.HazardClass)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Skipping hazard entry %d: HazardClass is not set."), HazardIndex);
+		return false;
+	}
+
+	if (!GridManager->IsInsidePlayableArea(HazardData.SpawnCell))
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("Skipping hazard entry %d (%s): spawn cell (%d, %d) is outside the playable area."),
+			HazardIndex,
+			*HazardData.HazardClass->GetName(),
+			HazardData.SpawnCell.X,
+			HazardData.SpawnCell.Y);
+		return false;
+	}
+
+	if (HazardData.MovementSpeed <= 0.f)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("Hazard entry %d (%s) has non-positive MovementSpeed %.2f. It will be clamped by the movement component."),
+			HazardIndex,
+			*HazardData.HazardClass->GetName(),
+			HazardData.MovementSpeed);
+	}
+
+	if (HazardData.PatrolCells.Num() == 1)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("Hazard entry %d (%s) has only one patrol cell. Moving hazards need at least two cells to patrol."),
+			HazardIndex,
+			*HazardData.HazardClass->GetName());
+	}
+
+	return true;
+}
+
+TArray<FIntPoint> ASnakeGameMode::GetValidatedPatrolCells(
+	const FHazardSpawnData& HazardData,
+	const AHazard* SpawnedHazard) const
+{
+	TArray<FIntPoint> ValidPatrolCells;
+
+	for (const FIntPoint& PatrolCell : HazardData.PatrolCells)
+	{
+		if (!GridManager->IsInsidePlayableArea(PatrolCell))
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("Hazard %s ignores patrol cell outside playable area: (%d, %d)."),
+				SpawnedHazard ? *SpawnedHazard->GetName() : TEXT("Unknown"),
+				PatrolCell.X,
+				PatrolCell.Y);
+			continue;
+		}
+
+		ValidPatrolCells.Add(PatrolCell);
+	}
+
+	return ValidPatrolCells;
+}
+
+void ASnakeGameMode::ClearHazards()
+{
+	for (AHazard* Hazard : SpawnedHazards)
+	{
+		if (IsValid(Hazard))
+		{
+			Hazard->Destroy();
+		}
+	}
+
+	SpawnedHazards.Empty();
 }
 
 void ASnakeGameMode::HandleFoodConsumed(ASnakePawn* EatingSnake, int32 ScoreValue)
@@ -141,6 +281,11 @@ void ASnakeGameMode::HandleFoodConsumed(ASnakePawn* EatingSnake, int32 ScoreValu
 	}
 	
 	FoodEatenThiStage++;
+
+	if (ASnakeGameState* GS = GetSnakeGameState())
+	{
+		GS->FoodEatenThisStage = FoodEatenThiStage;
+	}
 	
 	// Later: introduce a separate rules for when Battle ends (one snake died, or score target reacher, or timer runs out)
 	if (ActiveGameMode != ESnakeGameModeType::Battle)
@@ -322,6 +467,7 @@ void ASnakeGameMode::LoadStage(int32 StageIndex)
 	GridManager->ApplyStage(Stage);
 	
 	DestroySpawnedSnakes();
+	ClearHazards();
 	
 	if (ActiveGameMode == ESnakeGameModeType::NormalSinglePlayer)
 	{
@@ -336,6 +482,7 @@ void ASnakeGameMode::LoadStage(int32 StageIndex)
 		SpawnCoopSnakes();
 	}
 
+	SpawnHazards(Stage);
 	SpawnFood();
 	MoveFoodToRandomFreeCell();
 
@@ -524,6 +671,35 @@ bool ASnakeGameMode::IsCellOccupiedByOtherSnake(
 	return false;
 }
 
+bool ASnakeGameMode::IsCellReachableByOtherSnakeHead(
+	const ASnakePawn* AskingSnake,
+	const FIntPoint& Cell) const
+{
+	for (const ASnakePawn* Snake : SpawnedSnakes)
+	{
+		if (!Snake || Snake == AskingSnake || Snake->IsDead())
+		{
+			continue;
+		}
+
+		for (ESnakeDirection Direction : {
+			ESnakeDirection::Up,
+			ESnakeDirection::Down,
+			ESnakeDirection::Left,
+			ESnakeDirection::Right
+		})
+		{
+			if (Snake->CanRequestDirection(Direction) &&
+				Snake->GetNextCellForDirection(Direction) == Cell)
+			{
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
 void ASnakeGameMode::DestroySpawnedSnakes()
 {
 	for (ASnakePawn* Snake : SpawnedSnakes)
@@ -583,17 +759,5 @@ APlayerController* ASnakeGameMode::GetOrCreateLocalPlayerController(int32 SlotIn
 			SlotIndex,
 			PC ? *PC->GetName() : TEXT("None"));
 	}
-	
-	// Temporary logs
-	for (int32 i = 0; i < 2; ++i)
-	{
-		APlayerController* PCTest = UGameplayStatics::GetPlayerController(this, i);
-		UE_LOG(LogTemp, Warning,
-			TEXT("Controller %d = %s, Pawn = %s"),
-			i,
-			PCTest ? *PCTest->GetName() : TEXT("None"),
-			(PCTest && PCTest->GetPawn()) ? *PCTest->GetPawn()->GetName() : TEXT("None"));
-	}
-
 	return PC;
 }

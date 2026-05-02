@@ -9,10 +9,12 @@
 
 class ASnakePawn;
 class AFoodActor;
+class AHazard;
 class AGridManagerActor;
 class ASnakeGameState;
 class UAudioComponent;
 class USoundBase;
+struct FHazardSpawnData;
 struct FSnakeStageConfig;
 
 /**
@@ -41,6 +43,7 @@ public:
 	TArray<FIntPoint> GetAllSnakeOccupiedCells() const;
 	
 	bool IsCellOccupiedByOtherSnake(const ASnakePawn* AskingSnake, const FIntPoint& Cell) const;
+	bool IsCellReachableByOtherSnakeHead(const ASnakePawn* AskingSnake, const FIntPoint& Cell) const;
 
 private:
 	UPROPERTY(EditDefaultsOnly, Category = "Snake")
@@ -78,6 +81,9 @@ private:
 	TObjectPtr<AFoodActor> SpawnedFoodActor;
 
 	UPROPERTY()
+	TArray<TObjectPtr<AHazard>> SpawnedHazards;
+	
+	UPROPERTY()
 	TObjectPtr<AGridManagerActor> GridManager;
 	
 	UPROPERTY(EditAnywhere, Category = "Stages")
@@ -105,6 +111,10 @@ private:
 	void SpawnSnake();
 	void SpawnFood();
 	void MoveFoodToRandomFreeCell();
+	void SpawnHazards(const FSnakeStageConfig& Config);
+	bool ValidateHazardSpawnData(const FHazardSpawnData& HazardData, int32 HazardIndex) const;
+	TArray<FIntPoint> GetValidatedPatrolCells(const FHazardSpawnData& HazardData, const AHazard* SpawnedHazard) const;
+	void ClearHazards();
 	void LoadStage(int32 StageIndex);
 	void AdvanceStage();
 	void DestroySpawnedSnakes();
@@ -112,7 +122,6 @@ private:
 	void SpawnCoopSnakes();
 
 	UFUNCTION()
-	void HandleFoodConsumed(int32 ScoreValue);
 	void HandleFoodConsumed(ASnakePawn* EatingSnake, int32 ScoreValue);
 
 	UFUNCTION()

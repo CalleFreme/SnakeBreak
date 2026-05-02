@@ -5,6 +5,7 @@
 #include "InputActionValue.h"
 #include "Kismet/GameplayStatics.h"
 #include "GridManagerActor.h"
+#include "HazardTarget.h"
 #include "SnakePawn.generated.h"
 
 class UCameraComponent;
@@ -28,7 +29,7 @@ enum class ESnakeDirection : uint8
 };
 
 UCLASS()
-class ASnakePawn : public APawn
+class ASnakePawn : public APawn, public IHazardTarget
 {
 	GENERATED_BODY()
 
@@ -37,6 +38,24 @@ public:
 
 	UFUNCTION()
 	void HandleFoodOverlap(AFoodActor* FoodActor);
+
+	UFUNCTION()
+	void HandleHeadOverlap(
+		UPrimitiveComponent* OverlappedComponent,
+		AActor* OtherActor,
+		UPrimitiveComponent* OtherComp,
+		int32 OtherBodyIndex,
+		bool bFromSweep,
+		const FHitResult& SweepResult);
+	
+	UFUNCTION()
+	void HandleBodySegmentOverlap(
+		UPrimitiveComponent* OverlappedComponent,
+		AActor* OtherActor,
+		UPrimitiveComponent* OtherComp,
+		int32 OtherBodyIndex,
+		bool bFromSweep,
+		const FHitResult& SweepResult);	
 
 	UPROPERTY(BlueprintAssignable, Category = "Snake|Events")
 	FOnFoodConsumed OnFoodConsumed;
@@ -51,6 +70,11 @@ public:
 	void GetProjectedOccupiedGridCellsAfterMove(const FIntPoint& NextCell, TSet<FIntPoint>& OutOccupiedCells) const;
 
 	void ResetSnake();
+	void Eliminate();
+	void TrimTail(int32 HitSegmentIndex);
+
+	virtual void EliminateByHazard_Implementation(AHazard* Hazard) override;
+	virtual void TrimTailByHazard_Implementation(AHazard* Hazard, int32 HitSegmentIndex) override;
 	
 	void CacheGridManager();
 	
@@ -180,10 +204,15 @@ private:
 	// Body system
 	void StartNewMoveStep();
 	void FinishMoveStep();
-	void UpdateBodyVisuals(float Alpha); // Alpha is 0 to 1 representing progress from current grid cell to next grid cell
 	void EnsureBodySegmentMeshCount(); // Need a way to make sure we have the right number of body segment meshes to match the body segments in CurrentBodyGridPositions. This function adds or removes meshes as needed.
+	void EnsureBodySegmentColliderCount();
 	void ClearBodyVisuals();
+	void ClearBodySegmentColliders();
 	void AddInitialBodySegments(int32 NumSegments);
+	void UpdateBodySegments(float Alpha);
+	void UpdateBodyVisuals(float Alpha); // Alpha is 0 to 1 representing progress from current grid cell to next grid cell
+	void UpdateBodySegmentColliders(float Alpha);
+	USphereComponent* CreateBodySegmentCollider(int32 SegmentIndex, const FIntPoint& GridCell);
 	void GrowSnake(int32 Amount = 1);
 
 	// Components
@@ -246,6 +275,9 @@ private:
 	// Body visuals settings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Snake|Body", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UStaticMesh> BodySegmentMeshAsset = nullptr;
+	
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Snake|Body", meta = (AllowPrivateAccess = "true"))
+	TArray<TObjectPtr<USphereComponent>> BodySegmentColliders;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Snake|Body", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UMaterialInterface> BodySegmentMaterial = nullptr;

@@ -1,5 +1,6 @@
 #include "SnakePawn.h"
 #include "FoodActor.h"
+#include "Hazard.h"
 #include "Camera/CameraComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "EnhancedInputComponent.h"
@@ -25,6 +26,7 @@ ASnakePawn::ASnakePawn()
 	RootComponent = CollisionSphere;
 	CollisionSphere->SetSphereRadius(CollisionSphereRadius);
 	CollisionSphere->SetCollisionProfileName(TEXT("Pawn")); // Set the collision profile to "Pawn", which is a predefined profile that allows it to collide with the world and other pawns, but not block the camera or other things. This is important for our snake pawn, because we want it to be able to collide with the ground and other objects, but we don't want it to block the camera or cause weird physics interactions with the box mesh.
+	CollisionSphere->SetGenerateOverlapEvents(true);
 
 	SnakeHeadMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SnakeHeadMesh"));
 	SnakeHeadMesh->SetupAttachment(RootComponent);
@@ -50,6 +52,10 @@ ASnakePawn::ASnakePawn()
 void ASnakePawn::BeginPlay()
 {
 	Super::BeginPlay();
+
+	CollisionSphere->OnComponentBeginOverlap.AddDynamic(
+		this,
+		&ASnakePawn::HandleHeadOverlap);
 	
 	if (!GridManager)
 	{
@@ -82,9 +88,9 @@ void ASnakePawn::BeginPlay()
 
 		CurrentBodyGridPositions.Empty();
 		PreviousBodyGridPositions.Empty();
+		TargetBodyGridPositions.Empty();
 		AddInitialBodySegments(InitialBodyLength);
-		EnsureBodySegmentMeshCount();
-		UpdateBodyVisuals(0.f);
+		UpdateBodySegments(0.f);
 	}
 	else
 	{
@@ -363,7 +369,7 @@ void ASnakePawn::TickGridMovement(float DeltaTime)
 	const FVector NewHeadLocation = FMath::Lerp(StepStartWorldLocation, StepTargetWorldLocation, Alpha);
 	SetActorLocation(NewHeadLocation, false);
 
-	UpdateBodyVisuals(Alpha); // Since we have now moved the head, we also want to update the body segment locations to follow the head smoothly, so we call UpdateBodyVisuals with the current interpolation alpha to position the body segments correctly between their previous and current grid positions.
+	UpdateBodySegments(Alpha);
 
 	if (Alpha >= 1.f)
 	{
@@ -434,7 +440,7 @@ void ASnakePawn::FinishMoveStep()
 	}
 	
 	SetActorLocation(StepTargetWorldLocation, false);
-	UpdateBodyVisuals(1.f);
+	UpdateBodySegments(1.f);
 	bIsMovingToTarget = false;
 }
 
@@ -450,9 +456,9 @@ void ASnakePawn::UpdateBodyVisuals(float Alpha)
 		FIntPoint StartCell = PreviousBodyGridPositions.IsValidIndex(i) ?
 		PreviousBodyGridPositions[i] : CurrentBodyGridPositions[i];
 		
-		// Target cell = where this segment should be after the current step
+		// Missing target data means this segment was just created or resynced.
 		FIntPoint TargetCell = TargetBodyGridPositions.IsValidIndex(i) ?
-		TargetBodyGridPositions[i] : StartCell;
+		TargetBodyGridPositions[i] : CurrentBodyGridPositions[i];
 
 		const FVector StartWorldLocation = GridToWorldLocation(StartCell);
 		const FVector TargetWorldLocation = GridToWorldLocation(TargetCell);
@@ -511,6 +517,29 @@ void ASnakePawn::EnsureBodySegmentMeshCount()
 	}
 }
 
+void ASnakePawn::EnsureBodySegmentColliderCount()
+{
+	while (BodySegmentColliders.Num() < CurrentBodyGridPositions.Num())
+	{
+		const int32 SegmentIndex = BodySegmentColliders.Num();
+		USphereComponent* NewCollider = CreateBodySegmentCollider(
+			SegmentIndex,
+			CurrentBodyGridPositions[SegmentIndex]);
+
+		BodySegmentColliders.Add(NewCollider);
+	}
+
+	while (BodySegmentColliders.Num() > CurrentBodyGridPositions.Num())
+	{
+		if (USphereComponent* LastCollider = BodySegmentColliders.Last())
+		{
+			LastCollider->DestroyComponent();
+		}
+
+		BodySegmentColliders.Pop();
+	}
+}
+
 void ASnakePawn::ClearBodyVisuals()
 {
 	for (UStaticMeshComponent* SegmentMesh : BodySegmentMeshes)
@@ -523,9 +552,29 @@ void ASnakePawn::ClearBodyVisuals()
 	BodySegmentMeshes.Empty();
 }
 
+void ASnakePawn::ClearBodySegmentColliders()
+{
+	for (USphereComponent* Collider : BodySegmentColliders)
+	{
+		if (Collider)
+		{
+			Collider->DestroyComponent();
+		}
+	}
+
+	BodySegmentColliders.Empty();
+}
+
+void ASnakePawn::UpdateBodySegments(float Alpha)
+{
+	UpdateBodyVisuals(Alpha);
+	UpdateBodySegmentColliders(Alpha);
+}
+
 void ASnakePawn::AddInitialBodySegments(int32 NumSegments)
 {
 	CurrentBodyGridPositions.Empty();
+	ClearBodySegmentColliders();
 
 	const FIntPoint BackwardOffset = DirectionToGridOffset(CurrentDirection) * -1; // We want to add body segments in the opposite direction of the current movement, so we multiply the grid offset by -1 to get the backward offset.
 	FIntPoint NextBodyCell = CurrentGridPosition + BackwardOffset;
@@ -535,6 +584,63 @@ void ASnakePawn::AddInitialBodySegments(int32 NumSegments)
 		CurrentBodyGridPositions.Add(NextBodyCell);
 		NextBodyCell += BackwardOffset; // Move the next body cell further back for the next segment
 	}
+}
+
+void ASnakePawn::UpdateBodySegmentColliders(float Alpha)
+{
+	EnsureBodySegmentColliderCount();
+
+	for (int32 i = 0; i < BodySegmentColliders.Num(); ++i)
+	{
+		if (!IsValid(BodySegmentColliders[i]))
+		{
+			continue;
+		}
+
+		const FIntPoint StartCell = PreviousBodyGridPositions.IsValidIndex(i)
+			? PreviousBodyGridPositions[i]
+			: CurrentBodyGridPositions[i];
+
+		const FIntPoint TargetCell = TargetBodyGridPositions.IsValidIndex(i)
+			? TargetBodyGridPositions[i]
+			: CurrentBodyGridPositions[i];
+
+		const FVector StartWorldLocation = GridToWorldLocation(StartCell);
+		const FVector TargetWorldLocation = GridToWorldLocation(TargetCell);
+		const FVector NewWorldLocation = FMath::Lerp(StartWorldLocation, TargetWorldLocation, Alpha);
+
+		BodySegmentColliders[i]->SetWorldLocation(NewWorldLocation);
+	}
+}
+
+USphereComponent* ASnakePawn::CreateBodySegmentCollider(int32 SegmentIndex, const FIntPoint& GridCell)
+{
+	USphereComponent* NewCollider = NewObject<USphereComponent>(
+		this,
+		USphereComponent::StaticClass(),
+		*FString::Printf(TEXT("BodySegmentCollider_%d"), SegmentIndex));
+
+	if (!NewCollider)
+	{
+		return nullptr;
+	}
+
+	NewCollider->SetupAttachment(RootComponent);
+	NewCollider->RegisterComponent();
+	NewCollider->SetSphereRadius(40.f);
+	NewCollider->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	NewCollider->SetGenerateOverlapEvents(true);
+	NewCollider->SetCollisionObjectType(ECC_Pawn);
+	NewCollider->SetCollisionResponseToAllChannels(ECR_Ignore);
+	NewCollider->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Overlap);
+	NewCollider->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Overlap);
+	NewCollider->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
+	NewCollider->OnComponentBeginOverlap.AddDynamic(
+		this,
+		&ASnakePawn::HandleBodySegmentOverlap);
+	NewCollider->SetWorldLocation(GridToWorldLocation(GridCell));
+
+	return NewCollider;
 }
 
 void ASnakePawn::TickFreeMovement(float DeltaTime)
@@ -610,6 +716,25 @@ void ASnakePawn::DrawDebugInfo()
 			0,
 			2.0f // Line thickness
 		);
+	}
+
+	for (USphereComponent* Collider : BodySegmentColliders)
+	{
+		if (!IsValid(Collider))
+		{
+			continue;
+		}
+
+		DrawDebugSphere(
+			GetWorld(),
+			Collider->GetComponentLocation(),
+			Collider->GetScaledSphereRadius(),
+			12,
+			FColor::Yellow,
+			false,
+			-1.f,
+			0,
+			1.5f);
 	}
 
 	// Draw pawn's forward vector arrow (Blue)
@@ -699,6 +824,85 @@ void ASnakePawn::HandleSnakeDeath()
 	UE_LOG(LogTemp, Warning, TEXT("Snake has hit a wall and died!"));
 }
 
+void ASnakePawn::Eliminate()
+{
+	HandleSnakeDeath();
+}
+
+void ASnakePawn::EliminateByHazard_Implementation(AHazard* Hazard)
+{
+	Eliminate();
+}
+
+void ASnakePawn::TrimTailByHazard_Implementation(AHazard* Hazard, int32 HitSegmentIndex)
+{
+	TrimTail(HitSegmentIndex);
+}
+
+void ASnakePawn::TrimTail(int32 HitSegmentIndex)
+{
+	if (bIsDead || !CurrentBodyGridPositions.IsValidIndex(HitSegmentIndex))
+	{
+		return;
+	}
+
+	const int32 NumToRemove = CurrentBodyGridPositions.Num() - HitSegmentIndex;
+	CurrentBodyGridPositions.RemoveAt(HitSegmentIndex, NumToRemove);
+	PreviousBodyGridPositions = CurrentBodyGridPositions;
+	TargetBodyGridPositions = CurrentBodyGridPositions;
+	PendingGrowth = 0;
+
+	UpdateBodySegments(1.f);
+}
+
+void ASnakePawn::HandleBodySegmentOverlap(
+	UPrimitiveComponent* OverlappedComponent,
+	AActor* OtherActor,
+	UPrimitiveComponent* OtherComp,
+	int32 OtherBodyIndex,
+	bool bFromSweep,
+	const FHitResult& SweepResult)
+{
+	if (bIsDead || !OtherActor || OtherActor == this)
+	{
+		return;
+	}
+
+	AHazard* Hazard = Cast<AHazard>(OtherActor);
+	if (!Hazard)
+	{
+		return;
+	}
+
+	const int32 HitSegmentIndex = BodySegmentColliders.IndexOfByKey(
+		Cast<USphereComponent>(OverlappedComponent));
+	if (HitSegmentIndex == INDEX_NONE)
+	{
+		return;
+	}
+
+	Hazard->EliminateTarget(this, HitSegmentIndex);
+}
+
+void ASnakePawn::HandleHeadOverlap(
+	UPrimitiveComponent* OverlappedComponent,
+	AActor* OtherActor,
+	UPrimitiveComponent* OtherComp,
+	int32 OtherBodyIndex,
+	bool bFromSweep,
+	const FHitResult& SweepResult)
+{
+	if (bIsDead || !OtherActor || OtherActor == this)
+	{
+		return;
+	}
+
+	if (AHazard* Hazard = Cast<AHazard>(OtherActor))
+	{
+		Hazard->EliminateTarget(this, AHazard::HeadHitIndex);
+	}
+}
+
 void ASnakePawn::ResetSnake()
 {
 	const FIntPoint SpawnCell = GetClampedStartGridPosition();
@@ -722,10 +926,10 @@ void ASnakePawn::ResetSnake()
 	PreviousBodyGridPositions.Empty();
 	TargetBodyGridPositions.Empty();
 	ClearBodyVisuals();
+	ClearBodySegmentColliders();
 
 	AddInitialBodySegments(InitialBodyLength);
-	EnsureBodySegmentMeshCount();
-	UpdateBodyVisuals(1.f);
+	UpdateBodySegments(1.f);
 
 	PendingGrowth = 0;
 }
@@ -822,6 +1026,11 @@ void ASnakePawn::SetStartGridPosition(FIntPoint NewStartGridPosition)
 
 bool ASnakePawn::RequestDirection(ESnakeDirection NewDirection)
 {
+	if (NewDirection == CurrentDirection)
+	{
+		return false;
+	}
+
 	if (!CanRequestDirection(NewDirection))
 	{
 		return false;
@@ -840,7 +1049,7 @@ bool ASnakePawn::CanRequestDirection(ESnakeDirection NewDirection) const
 
 	if (NewDirection == CurrentDirection)
 	{
-		return true;
+		return false;
 	}
 
 	return IsValidTurn(NewDirection);

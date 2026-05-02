@@ -57,6 +57,11 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid")
 	float CellSize = 100.0f;
+	
+	float GetCellSize() const
+	{
+		return CellSize;
+	}
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid")
 	FVector GridOrigin = FVector::ZeroVector;
