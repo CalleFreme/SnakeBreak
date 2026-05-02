@@ -28,6 +28,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Food")
 	void RespawnFood(const FIntPoint& NewGridPosition, const FVector& NewWorldLocation);
 	
+	UFUNCTION(BlueprintCallable, Category = "Food")
+	float GetScoreValue() const { return ScoreValue; }	
+	
 protected:
 	// Called when the game starts or when spawned
 	virtual void BeginPlay() override;
@@ -47,6 +50,9 @@ public:
 
 private:
 	bool bIsActive = true;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess))
+	float ScoreValue = 10.f;	
 	
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess))
 	TObjectPtr<USphereComponent> CollisionSphere;
