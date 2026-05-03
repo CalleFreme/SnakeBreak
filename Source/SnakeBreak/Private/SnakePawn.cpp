@@ -401,9 +401,10 @@ void ASnakePawn::StartNewMoveStep()
 	// 	return;
 	// }
 
-	if (!IsNextGridCellSafe(PendingNextGridPosition))
+	FString UnsafeMoveReason;
+	if (TryGetUnsafeMoveReason(PendingNextGridPosition, UnsafeMoveReason))
 	{
-		HandleSnakeDeath();
+		HandleSnakeDeath(UnsafeMoveReason);
 		return;
 	}
 	
@@ -552,12 +553,47 @@ bool ASnakePawn::WouldHitWall(const FIntPoint& NextCell) const
 		return false;
 	}
 	
-	return GridManager->IsBlockedCell(NextCell);
+	return !GridManager->IsInsidePlayableArea(NextCell)
+		|| GridManager->IsBlockedCell(NextCell);
 }
 
 bool ASnakePawn::WouldHitSelf(const FIntPoint& NextCell) const
 {
 	return SnakeBodyComponent && SnakeBodyComponent->WouldHitSelf(NextCell);
+}
+
+bool ASnakePawn::TryGetUnsafeMoveReason(const FIntPoint& NextCell, FString& OutReason) const
+{
+	if (GridManager)
+	{
+		if (!GridManager->IsInsidePlayableArea(NextCell))
+		{
+			OutReason = TEXT("Outside playable area");
+			return true;
+		}
+
+		if (GridManager->IsBlockedCell(NextCell))
+		{
+			OutReason = TEXT("Blocked wall cell");
+			return true;
+		}
+	}
+
+	if (WouldHitSelf(NextCell))
+	{
+		OutReason = TEXT("Self collision");
+		return true;
+	}
+
+	const ASnakeGameMode* SnakeGM = GetWorld()->GetAuthGameMode<ASnakeGameMode>();
+	if (SnakeGM && SnakeGM->IsCellOccupiedByOtherSnake(this, NextCell))
+	{
+		OutReason = TEXT("Other snake collision");
+		return true;
+	}
+
+	OutReason.Reset();
+	return false;
 }
 
 void ASnakePawn::GrowSnake(int32 Amount)
@@ -568,7 +604,7 @@ void ASnakePawn::GrowSnake(int32 Amount)
 	}
 }
 
-void ASnakePawn::HandleSnakeDeath()
+void ASnakePawn::HandleSnakeDeath(const FString& DeathReason)
 {
 	if (bIsDead)
 	{
@@ -576,8 +612,24 @@ void ASnakePawn::HandleSnakeDeath()
 	}
 	
 	bIsDead = true;
+	const int32 PendingGrowth = SnakeBodyComponent
+		? SnakeBodyComponent->GetPendingGrowth()
+		: 0;
+
+	UE_LOG(LogTemp, Warning,
+		TEXT("Snake died: %s. Snake=%s Slot=%d CurrentCell=(%d,%d) NextCell=(%d,%d) Direction=%s Requested=%s PendingGrowth=%d"),
+		*DeathReason,
+		*GetName(),
+		PlayerSlotIndex,
+		CurrentGridPosition.X,
+		CurrentGridPosition.Y,
+		PendingNextGridPosition.X,
+		PendingNextGridPosition.Y,
+		*UEnum::GetValueAsString(CurrentDirection),
+		*UEnum::GetValueAsString(RequestedDirection),
+		PendingGrowth);
+
 	OnSnakeDied.Broadcast(this); // THIS snake has died
-	UE_LOG(LogTemp, Warning, TEXT("Snake has hit a wall and died!"));
 }
 
 void ASnakePawn::Eliminate()
@@ -587,7 +639,9 @@ void ASnakePawn::Eliminate()
 
 void ASnakePawn::EliminateByHazard_Implementation(AHazard* Hazard)
 {
-	Eliminate();
+	HandleSnakeDeath(Hazard
+		? FString::Printf(TEXT("Hazard collision: %s"), *Hazard->GetName())
+		: FString(TEXT("Hazard collision")));
 }
 
 void ASnakePawn::TrimTailByHazard_Implementation(AHazard* Hazard, int32 HitSegmentIndex)
@@ -682,6 +736,18 @@ TArray<FIntPoint> ASnakePawn::GetAllOccupiedGridCells() const
 		: TArray<FIntPoint>();
 	Occupied.Insert(CurrentGridPosition, 0);
 	return Occupied;
+}
+
+TArray<FIntPoint> ASnakePawn::GetFoodSpawnForbiddenGridCells() const
+{
+	TArray<FIntPoint> ForbiddenCells = GetAllOccupiedGridCells();
+
+	if (bIsMovingToTarget)
+	{
+		ForbiddenCells.AddUnique(PendingNextGridPosition);
+	}
+
+	return ForbiddenCells;
 }
 
 bool ASnakePawn::IsNextGridCellSafe(const FIntPoint& NextCell, bool bCheckOtherSnakes) const

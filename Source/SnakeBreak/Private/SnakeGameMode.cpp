@@ -645,7 +645,7 @@ TArray<FIntPoint> ASnakeGameMode::GetAllSnakeOccupiedCells() const
 			continue;
 		}
 
-		Occupied.Append(Snake->GetAllOccupiedGridCells());
+		Occupied.Append(Snake->GetFoodSpawnForbiddenGridCells());
 	}
 
 	return Occupied;

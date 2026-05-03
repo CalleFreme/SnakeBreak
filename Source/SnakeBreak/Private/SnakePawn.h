@@ -61,6 +61,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Snake")
 	TArray<FIntPoint> GetAllOccupiedGridCells() const;
 
+	TArray<FIntPoint> GetFoodSpawnForbiddenGridCells() const;
 	bool IsNextGridCellSafe(const FIntPoint& NextCell, bool bCheckOtherSnakes = true) const;
 	void GetProjectedOccupiedGridCellsAfterMove(const FIntPoint& NextCell, TSet<FIntPoint>& OutOccupiedCells) const;
 
@@ -183,7 +184,8 @@ private:
 	bool WouldHitWall(const FIntPoint& NextCell) const;
 	bool WouldHitSelf(const FIntPoint& NextCell) const;
 
-	void HandleSnakeDeath();
+	bool TryGetUnsafeMoveReason(const FIntPoint& NextCell, FString& OutReason) const;
+	void HandleSnakeDeath(const FString& DeathReason = TEXT("Eliminated"));
 
 	// Body system
 	void StartNewMoveStep();
